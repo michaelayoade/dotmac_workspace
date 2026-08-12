@@ -15,6 +15,22 @@ depend on a deployment detail rather than on the code.
 
 So the Workspace names its cookie `dmws_session` and carries its own guard.
 
+## BLOCKER B1: this guard authenticates, it does not authorize
+
+It establishes that the caller is an authenticated person in this tenant. It
+checks **no role and no permission**, so any member of the tenant reaches the
+launcher. The intended decision is `workspace.applications.read`, enforced
+through a public kernel seam — and no cookie-compatible permission seam exists:
+`require_permission` is layered over the BEARER guard, and `require_web_auth`
+reads the `access_token` cookie this Workspace must not share while hardcoding
+the `"admin"` role.
+
+Hand-rolling the role query here is explicitly the wrong fix: duplicating kernel
+authorization logic in an assembly is how a plane falls behind a kernel security
+fix. So the gap is recorded as an adoption blocker rather than closed locally —
+see `docs/ADOPTION-BLOCKERS.md`, and note that `/applications` must not be
+exposed to a real tenant until B1 clears.
+
 ## What is deliberately NOT re-implemented
 
 Token, session and party validation. That is

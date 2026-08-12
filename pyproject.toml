@@ -13,12 +13,14 @@ python = ">=3.12,<3.14"
 # assembly lives in a different repository from the packages it consumes, and a
 # path dependency would make the build depend on a sibling checkout.
 #
-# `testing` ships the kernel's supported test kit, which this assembly's tests
-# consume instead of hand-rolling a harness.
-dotmac-kernel = { version = "0.1.0a43", extras = ["testing"], source = "forgejo" }
+# No extras: the `testing` kit was declared and never used, and an unused extra
+# is surface a deployment carries and nobody checks. It returns if and when a
+# test actually consumes the kernel harness.
+dotmac-kernel = { version = "0.1.0a43", source = "forgejo" }
 # The tenant's connected-application portfolio, and the permanent owner of the
-# `ApplicationDescriptor` contract (ADR-0021 §4). This assembly is its first
-# consumer.
+# `ApplicationDescriptor` contract (ADR-0021 §4). This assembly is its INTENDED
+# first consumer and is not yet one: nothing here is deployed, so the module's
+# dossier correctly says zero production consumers. See docs/ADOPTION-BLOCKERS.md.
 dotmac-application-directory = { version = "0.1.0a1", source = "forgejo" }
 uvicorn = { extras = ["standard"], version = "^0.30" }
 # The one Workspace database's driver. Separate from every application's

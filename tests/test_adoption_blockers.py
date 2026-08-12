@@ -1,0 +1,83 @@
+"""The adoption blockers stay visible, and stay unclosed the wrong way.
+
+ADR-0018: an exemption must state an enforceable premise, or the region is
+unmonitored rather than exempt. `docs/ADOPTION-BLOCKERS.md` is this repository's
+statement that it is a scaffold rather than a consumer, and these tests are what
+stop that statement drifting away from the code.
+
+The important one is `test_the_guard_does_not_hand_roll_a_role_check`: the fix
+for B1 is a kernel seam, and closing it locally by querying roles here would
+look like progress while making this plane one that falls behind kernel security
+fixes.
+"""
+
+from __future__ import annotations
+
+import ast
+import inspect
+from pathlib import Path
+
+from dotmac_workspace.launcher import guard
+
+BLOCKERS = Path(__file__).resolve().parents[1] / "docs" / "ADOPTION-BLOCKERS.md"
+GUARD_SOURCE = Path(inspect.getfile(guard)).read_text(encoding="utf-8")
+
+
+def test_the_blockers_file_exists_and_names_the_permission_code() -> None:
+    """B1 is the blocker that needs a kernel decision. If the intended
+    permission code stops being named, nobody can act on it."""
+    assert BLOCKERS.is_file()
+    text = BLOCKERS.read_text(encoding="utf-8")
+    assert "workspace.applications.read" in text
+    assert "audit-complete" in text, (
+        "the blockers file must keep stating that the directory has zero "
+        "production consumers — that is what the dossier claims"
+    )
+
+
+def test_the_guard_points_at_the_blocker() -> None:
+    """A reader of the guard must not conclude it authorizes."""
+    assert "BLOCKER B1" in GUARD_SOURCE
+    assert "ADOPTION-BLOCKERS.md" in GUARD_SOURCE
+
+
+def test_the_guard_does_not_hand_roll_a_role_check() -> None:
+    """The fix for B1 is a kernel seam, not a local query.
+
+    Duplicating kernel authorization logic in an assembly is how a plane falls
+    behind a kernel security fix — the failure ADR-0015 recorded against
+    academy, where a control was configured, asserted in config validation, and
+    never armed. If this test fails because someone added a role lookup here,
+    the fix is to remove it and press for the seam.
+    """
+    forbidden = {"PartyRoleGrant", "Role", "select", "execute", "scalars", "query"}
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(GUARD_SOURCE)):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+    offenders = forbidden & names
+    assert not offenders, (
+        f"the Workspace guard is querying authorization state itself "
+        f"({sorted(offenders)}). B1 is closed by a kernel permission seam that "
+        "works for cookie-authenticated callers, never by duplicating the "
+        "kernel's role logic here."
+    )
+
+
+def test_the_kernel_dependency_declares_no_unused_extra() -> None:
+    """B5, kept closed. An unused extra is surface a deployment carries and
+    nobody checks."""
+    pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+    for line in pyproject.splitlines():
+        if line.startswith("dotmac-kernel ="):
+            assert "extras" not in line, (
+                "the kernel test kit was declared and never used; add it back "
+                "only alongside a test that consumes it"
+            )
+            break
+    else:  # pragma: no cover - the dependency cannot vanish
+        raise AssertionError("dotmac-kernel dependency not found")

@@ -133,6 +133,16 @@ poetry run pytest
 
 `make check` and `make test` work normally once both are on the index.
 
+## Status: local scaffold, not a consumer
+
+**Nothing here is deployed, and this repository is not yet a consumer of
+`dotmac-application-directory`** — the module's dossier correctly records zero
+production consumers. `docs/ADOPTION-BLOCKERS.md` lists what must clear first;
+the one needing a kernel decision is **B1**: there is no cookie-compatible
+permission seam, so the launcher guard authenticates without authorizing and
+`/applications` must not be exposed to a real tenant. `/login` does not exist
+yet either (B2), so the surface is unreachable end to end.
+
 ## Commands
 
 | | |
