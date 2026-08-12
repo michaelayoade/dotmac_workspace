@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install poetry
+        run: pipx install poetry
+
+      # The two Dotmac packages resolve from the private Forgejo index
+      # (ADR-0005). The credential is a repository secret; it is never a value
+      # in this file, in the lock file, or in a log line.
+      - name: Configure the private index
+        env:
+          FORGEJO_PYPI_USER: ${{ secrets.FORGEJO_PYPI_USER }}
+          FORGEJO_PYPI_TOKEN: ${{ secrets.FORGEJO_PYPI_TOKEN }}
+        run: |
+          poetry config http-basic.forgejo "$FORGEJO_PYPI_USER" "$FORGEJO_PYPI_TOKEN"
+
+      - name: Install
+        run: poetry install --no-interaction
+
+      - name: Lint
+        run: poetry run ruff check .
+
+      - name: Format check
+        run: poetry run ruff format --check .
+
+      - name: Type check
+        run: poetry run mypy src/dotmac_workspace
+
+      - name: Test
+        run: poetry run pytest
