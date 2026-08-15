@@ -47,7 +47,9 @@ the security path is stubbed.
 
 from __future__ import annotations
 
+import ast
 import inspect
+import textwrap
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -269,6 +271,88 @@ def test_the_matching_pair_still_completes(
     assert completed.return_path == "/applications"
 
 
+#: A module whose only mention of the call is a docstring. Exactly the shape
+#: that broke the substring version of the guard below.
+DOCSTRING_MENTIONING_THE_CALL = (
+    '"""Compared with secrets.compare_digest by the package."""\n'
+    "x = 1\n"
+)
+
+
+def _calls_named(tree: ast.AST, name: str) -> list[int]:
+    """Lines calling `name`, as SYNTAX. Docstrings and comments are invisible to
+    an AST, which is the entire reason this is not a substring search."""
+    return [
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id == name)
+            or (isinstance(node.func, ast.Attribute) and node.func.attr == name)
+        )
+    ]
+
+
+def _forwards_keyword(tree: ast.AST, name: str) -> bool:
+    """True if some call passes `name=<expression mentioning name>`.
+
+    The value need not be the bare parameter: this assembly forwards
+    `stored_state=stored_state or ""`, normalising an absent cookie to the empty
+    string the package already refuses. Requiring an exact `Name` node rejected
+    that and would have pushed the code to be shaped by its guard.
+
+    What it still catches is the failure that matters — a keyword bound to
+    something ELSE, which is how the cookie half stops arriving while the call
+    still looks right.
+    """
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for kw in node.keywords:
+            if kw.arg != name:
+                continue
+            mentioned = {
+                sub.id for sub in ast.walk(kw.value) if isinstance(sub, ast.Name)
+            }
+            if name in mentioned:
+                return True
+    return False
+
+
+def test_the_delegation_checks_match_syntax_not_prose() -> None:
+    """Sensitivity AND specificity, because this exact mistake has now been made
+    three times in this programme.
+
+    A substring search for the name of the function being delegated to fails on
+    the DOCSTRING of the very function it is checking — which is what happened
+    here, and the only way to satisfy it would have been to delete the
+    explanation. The fleet rule is settled: an executable invariant matches call
+    sites, never concepts.
+    """
+    real = ast.parse("import secrets\nsecrets.compare_digest(a, b)\n")
+    bare = ast.parse("from secrets import compare_digest\ncompare_digest(a, b)\n")
+    prose = ast.parse(DOCSTRING_MENTIONING_THE_CALL)
+    assert _calls_named(real, "compare_digest")
+    assert _calls_named(bare, "compare_digest")
+    assert not _calls_named(prose, "compare_digest"), (
+        "the guard fires on prose again — that is the failure mode, not a "
+        "stricter check"
+    )
+
+    forwards = ast.parse("f(stored_state=stored_state)\n")
+    normalised = ast.parse('f(stored_state=stored_state or "")\n')
+    renamed = ast.parse("f(stored_state=something_else)\n")
+    assert _forwards_keyword(forwards, "stored_state")
+    assert _forwards_keyword(normalised, "stored_state"), (
+        "the real call normalises an absent cookie to the empty string the "
+        "package refuses; a guard that rejected that would shape the code"
+    )
+    assert not _forwards_keyword(renamed, "stored_state"), (
+        "a keyword bound to a DIFFERENT value must not count as forwarding — "
+        "that is how the cookie half would silently stop arriving"
+    )
+
+
 def test_this_assembly_does_not_check_the_pair_itself() -> None:
     """The delegation, asserted — because a SECOND check would be the defect.
 
@@ -282,13 +366,13 @@ def test_this_assembly_does_not_check_the_pair_itself() -> None:
     build if the pair ever stops being forwarded — a service that quietly
     dropped `stored_state` would otherwise still type-check.
     """
-    forwarded = inspect.getsource(service.complete_login)
-    assert "compare_digest" not in forwarded, (
+    tree = ast.parse(textwrap.dedent(inspect.getsource(service.complete_login)))
+    assert not _calls_named(tree, "compare_digest"), (
         "the assembly compares the state pair itself. That decision belongs to "
         "dotmac_auth_oidc; a local copy is a second implementation to keep in "
         "step, and security decisions do not survive being kept in step."
     )
-    assert "stored_state=stored_state" in forwarded, (
+    assert _forwards_keyword(tree, "stored_state"), (
         "the cookie half is no longer forwarded to the package — the pair "
         "check cannot fire on a value it never receives"
     )
