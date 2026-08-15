@@ -163,6 +163,18 @@ def store() -> InMemoryStateStore:
 # that proved the wheel by not running it would prove nothing.
 
 
+@pytest.fixture
+def provider_config() -> ProviderConfig:
+    """This deployment's registration, as a FIXTURE rather than an import.
+
+    `from tests.conftest import CONFIG` looks tidier and does not work: `tests`
+    is not a package and the rootdir is not on `sys.path` under the CI
+    invocation, so it imports here and `ModuleNotFoundError`s there. Fixtures
+    are the seam pytest actually guarantees.
+    """
+    return CONFIG
+
+
 @pytest.fixture(scope="session")
 def signing_key() -> Any:
     """A throwaway RSA key. Generated per session, never written to disk, and

@@ -43,7 +43,6 @@ from uuid import uuid4
 
 import pytest
 from dotmac_auth_oidc import IDTokenError, LoginState, StateUnavailableError
-from tests.conftest import CONFIG
 
 from dotmac_workspace.identity import relying_party, service
 from dotmac_workspace.identity.state_store import state_hash
@@ -64,9 +63,11 @@ def _real_client(monkeypatch: pytest.MonkeyPatch, rp_client: Any) -> None:
     monkeypatch.setattr(relying_party, "client", lambda config: rp_client)
 
 
-def _start(store: Any, tenant: Any, *, return_path: str = "/applications") -> Any:
+def _start(
+    store: Any, tenant: Any, config: Any, *, return_path: str = "/applications"
+) -> Any:
     return service.begin_login(
-        object(), tenant=tenant, return_path=return_path, store=store, config=CONFIG
+        object(), tenant=tenant, return_path=return_path, store=store, config=config
     )
 
 
@@ -76,7 +77,9 @@ def _ceremony(store: Any, state: str) -> LoginState:
     return store._rows[state_hash(state)][0]
 
 
-def _finish(store: Any, tenant: Any, *, state: str, code: str = "c") -> Any:
+def _finish(
+    store: Any, tenant: Any, config: Any, *, state: str, code: str = "c"
+) -> Any:
     """A callback whose cookie matches its query parameter. The MISMATCH is
     `test_login_csrf.py`'s subject, not this file's."""
     return service.complete_login(
@@ -86,7 +89,7 @@ def _finish(store: Any, tenant: Any, *, state: str, code: str = "c") -> Any:
         stored_state=state,
         code=code,
         store=store,
-        config=CONFIG,
+        config=config,
     )
 
 
@@ -97,7 +100,7 @@ def _finish(store: Any, tenant: Any, *, state: str, code: str = "c") -> Any:
 
 
 def test_the_verifier_and_the_return_path_never_leave_the_server(
-    store: Any,
+    store: Any, provider_config: Any
 ) -> None:
     """The load-bearing property of an opaque state.
 
@@ -106,7 +109,7 @@ def test_the_verifier_and_the_return_path_never_leave_the_server(
     rewrite into an open redirect, and a verifier that travelled would not be a
     verifier at all.
     """
-    started = _start(store, _tenant())
+    started = _start(store, _tenant(), provider_config)
     ceremony = _ceremony(store, started.state)
 
     assert ceremony.code_verifier not in started.url
@@ -115,7 +118,9 @@ def test_the_verifier_and_the_return_path_never_leave_the_server(
     assert ceremony.return_to == "/applications"
 
 
-def test_the_state_is_stored_hashed_never_in_the_clear(store: Any) -> None:
+def test_the_state_is_stored_hashed_never_in_the_clear(
+    store: Any, provider_config: Any
+) -> None:
     """A dump, a replica or a logged query plan must not yield a usable state.
 
     This is the ASSEMBLY's decision rather than the package's:
@@ -123,21 +128,23 @@ def test_the_state_is_stored_hashed_never_in_the_clear(store: Any) -> None:
     table is something `PostgresStateStore` chooses. The in-memory double copies
     that choice so the property is visible here too.
     """
-    started = _start(store, _tenant())
+    started = _start(store, _tenant(), provider_config)
     assert state_hash(started.state) in store._rows
     assert started.state not in store._rows
 
 
-def test_two_logins_never_share_a_state(store: Any) -> None:
-    states = {_start(store, _tenant()).state for _ in range(50)}
+def test_two_logins_never_share_a_state(store: Any, provider_config: Any) -> None:
+    states = {_start(store, _tenant(), provider_config).state for _ in range(50)}
     assert len(states) == 50
 
 
-def test_the_landing_path_is_carried_through_the_ceremony(store: Any) -> None:
+def test_the_landing_path_is_carried_through_the_ceremony(
+    store: Any, provider_config: Any
+) -> None:
     """`return_to` round-trips through the package and comes back on the
     verified subject, so this assembly never has to trust a query parameter for
     where to send somebody after they sign in."""
-    started = _start(store, _tenant(), return_path="/applications/erp")
+    started = _start(store, _tenant(), provider_config, return_path="/applications/erp")
     assert _ceremony(store, started.state).return_to == "/applications/erp"
 
 
@@ -145,45 +152,45 @@ def test_the_landing_path_is_carried_through_the_ceremony(store: Any) -> None:
 
 
 def test_an_unknown_state_is_refused_without_contacting_the_provider(
-    store: Any, idp: Any
+    store: Any, idp: Any, provider_config: Any
 ) -> None:
     """Claim first. A replayed or forged callback costs a round trip to the
     identity provider if the ordering is the other way round, which turns the
     login endpoint into a lever on the provider."""
     before = idp.discovery_fetches
     with pytest.raises(service.LoginRefused):
-        _finish(store, _tenant(), state="never-issued")
+        _finish(store, _tenant(), provider_config, state="never-issued")
     assert idp.discovery_fetches == before
 
 
 def test_a_state_works_exactly_once(
-    store: Any, monkeypatch: pytest.MonkeyPatch, idp: Any
+    store: Any, monkeypatch: pytest.MonkeyPatch, idp: Any, provider_config: Any
 ) -> None:
     """The second presentation is refused, and refused the same way as a forged
     one — a caller must not be able to tell "already used" from "never
     existed"."""
     tenant = _tenant()
-    started = _start(store, tenant)
+    started = _start(store, tenant, provider_config)
     idp.nonce = _ceremony(store, started.state).nonce
     monkeypatch.setattr(service, "finalize_external_login", lambda *a, **k: None)
 
     with pytest.raises(service.LoginRefused):
-        _finish(store, tenant, state=started.state)
+        _finish(store, tenant, provider_config, state=started.state)
     # The ceremony is gone even though the login FAILED downstream: claiming is
     # what makes a state single-use, and a state returned to the pool on failure
     # would be a state an attacker can retry.
     assert len(store) == 0
     with pytest.raises(service.LoginRefused):
-        _finish(store, tenant, state=started.state)
+        _finish(store, tenant, provider_config, state=started.state)
 
 
-def test_an_expired_ceremony_is_refused(store: Any) -> None:
+def test_an_expired_ceremony_is_refused(store: Any, provider_config: Any) -> None:
     """Expired in the STORE, which is where this assembly enforces it. The
     package re-checks its own TTL against `issued_at` as belt and braces, and
     the two are deliberately independent: a store with coarse expiry must not
     be able to extend a login's life."""
     tenant = _tenant()
-    started = _start(store, tenant)
+    started = _start(store, tenant, provider_config)
     ceremony, _ = store._rows[state_hash(started.state)]
     store._rows[state_hash(started.state)] = (
         ceremony,
@@ -191,7 +198,7 @@ def test_an_expired_ceremony_is_refused(store: Any) -> None:
     )
 
     with pytest.raises(service.LoginRefused):
-        _finish(store, tenant, state=started.state)
+        _finish(store, tenant, provider_config, state=started.state)
 
 
 def test_tenant_scoping_is_not_asserted_here() -> None:
@@ -211,7 +218,7 @@ def test_tenant_scoping_is_not_asserted_here() -> None:
 
 
 def test_an_unbound_subject_is_refused_and_nothing_is_provisioned(
-    store: Any, monkeypatch: pytest.MonkeyPatch, idp: Any
+    store: Any, monkeypatch: pytest.MonkeyPatch, idp: Any, provider_config: Any
 ) -> None:
     """No JIT provisioning and no email linking.
 
@@ -226,7 +233,7 @@ def test_an_unbound_subject_is_refused_and_nothing_is_provisioned(
     """
     tenant = _tenant()
     idp.subject = "never-bound"
-    started = _start(store, tenant)
+    started = _start(store, tenant, provider_config)
     idp.nonce = _ceremony(store, started.state).nonce
 
     asked: list[str] = []
@@ -243,14 +250,14 @@ def test_an_unbound_subject_is_refused_and_nothing_is_provisioned(
     )
 
     with pytest.raises(service.LoginRefused):
-        _finish(store, tenant, state=started.state)
+        _finish(store, tenant, provider_config, state=started.state)
     assert asked == ["never-bound"], (
         "the kernel was not asked about the subject the provider actually " "verified"
     )
 
 
 def test_a_provider_failure_is_the_same_refusal_as_an_unbound_subject(
-    store: Any, idp: Any
+    store: Any, idp: Any, provider_config: Any
 ) -> None:
     """One exception type, no reason field.
 
@@ -261,15 +268,15 @@ def test_a_provider_failure_is_the_same_refusal_as_an_unbound_subject(
     `LoginRefused` an unbound subject gets.
     """
     tenant = _tenant()
-    started = _start(store, tenant)
+    started = _start(store, tenant, provider_config)
     idp.nonce = "a-nonce-from-some-other-ceremony"
 
     with pytest.raises(service.LoginRefused):
-        _finish(store, tenant, state=started.state)
+        _finish(store, tenant, provider_config, state=started.state)
 
 
 def test_every_package_refusal_arrives_as_the_same_local_refusal(
-    store: Any, idp: Any
+    store: Any, idp: Any, provider_config: Any
 ) -> None:
     """The mapping is TOTAL, and that is the property worth pinning.
 
@@ -283,14 +290,14 @@ def test_every_package_refusal_arrives_as_the_same_local_refusal(
 
     # 1. no ceremony at all — the package raises StateUnavailableError.
     with pytest.raises(service.LoginRefused):
-        _finish(store, tenant, state="never-issued")
+        _finish(store, tenant, provider_config, state="never-issued")
 
     # 2. a live ceremony whose token carries no usable `sub` — IDTokenError.
-    started = _start(store, tenant)
+    started = _start(store, tenant, provider_config)
     idp.nonce = _ceremony(store, started.state).nonce
     idp.claim_overrides = {"sub": ""}
     with pytest.raises(service.LoginRefused):
-        _finish(store, tenant, state=started.state)
+        _finish(store, tenant, provider_config, state=started.state)
 
     # Both are `OIDCError`s, which is WHY catching the base class is total
     # rather than lucky. If either stops being one, the funnel above has a hole.

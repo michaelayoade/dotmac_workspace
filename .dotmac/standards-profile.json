@@ -51,7 +51,7 @@
         "src/dotmac_workspace/identity/service.py",
         "src/dotmac_workspace/identity/session.py",
         "src/dotmac_workspace/identity/state_store.py",
-        "src/dotmac_workspace/identity/oidc.py",
+        "src/dotmac_workspace/identity/relying_party.py",
         "src/dotmac_workspace/identity/config.py",
         "src/dotmac_workspace/identity/secret_bootstrap.py",
         "src/dotmac_workspace/identity/bootstrap.py"
@@ -110,7 +110,7 @@
         "src/dotmac_workspace/identity/service.py",
         "src/dotmac_workspace/identity/session.py",
         "src/dotmac_workspace/identity/state_store.py",
-        "src/dotmac_workspace/identity/oidc.py",
+        "src/dotmac_workspace/identity/relying_party.py",
         "src/dotmac_workspace/identity/config.py",
         "src/dotmac_workspace/identity/secret_bootstrap.py",
         "src/dotmac_workspace/identity/bootstrap.py",

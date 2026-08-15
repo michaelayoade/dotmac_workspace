@@ -55,7 +55,6 @@ from uuid import uuid4
 
 import pytest
 from dotmac_auth_oidc import OIDCClient
-from tests.conftest import CONFIG
 
 from dotmac_workspace.identity import relying_party, service
 from dotmac_workspace.identity.state_store import state_hash
@@ -82,7 +81,7 @@ def _real_client(monkeypatch: pytest.MonkeyPatch, rp_client: Any) -> None:
 
 
 def test_a_callback_whose_state_does_not_match_the_cookie_is_refused(
-    store: Any, monkeypatch: pytest.MonkeyPatch
+    store: Any, monkeypatch: pytest.MonkeyPatch, provider_config: Any
 ) -> None:
     """The attack, driven end to end at the service seam.
 
@@ -105,10 +104,18 @@ def test_a_callback_whose_state_does_not_match_the_cookie_is_refused(
     )
 
     attacker = service.begin_login(
-        object(), tenant=tenant, return_path="/applications", store=store, config=CONFIG
+        object(),
+        tenant=tenant,
+        return_path="/applications",
+        store=store,
+        config=provider_config,
     )
     victim = service.begin_login(
-        object(), tenant=tenant, return_path="/applications", store=store, config=CONFIG
+        object(),
+        tenant=tenant,
+        return_path="/applications",
+        store=store,
+        config=provider_config,
     )
     assert attacker.state != victim.state
 
@@ -120,12 +127,12 @@ def test_a_callback_whose_state_does_not_match_the_cookie_is_refused(
             stored_state=victim.state,
             code="an-authorization-code",
             store=store,
-            config=CONFIG,
+            config=provider_config,
         )
 
 
 def test_a_callback_with_no_cookie_state_is_refused(
-    store: Any, monkeypatch: pytest.MonkeyPatch
+    store: Any, monkeypatch: pytest.MonkeyPatch, provider_config: Any
 ) -> None:
     """The victim who never started a login has no cookie at all.
 
@@ -138,7 +145,11 @@ def test_a_callback_with_no_cookie_state_is_refused(
         service, "finalize_external_login", lambda *a, **k: pytest.fail("finalized")
     )
     started = service.begin_login(
-        object(), tenant=tenant, return_path="/applications", store=store, config=CONFIG
+        object(),
+        tenant=tenant,
+        return_path="/applications",
+        store=store,
+        config=provider_config,
     )
 
     for absent in (None, ""):
@@ -150,12 +161,12 @@ def test_a_callback_with_no_cookie_state_is_refused(
                 stored_state=absent,
                 code="an-authorization-code",
                 store=store,
-                config=CONFIG,
+                config=provider_config,
             )
 
 
 def test_a_mismatched_callback_does_not_burn_the_ceremony(
-    store: Any, monkeypatch: pytest.MonkeyPatch
+    store: Any, monkeypatch: pytest.MonkeyPatch, provider_config: Any
 ) -> None:
     """The ordering, asserted rather than left to reading order.
 
@@ -172,7 +183,11 @@ def test_a_mismatched_callback_does_not_burn_the_ceremony(
         service, "finalize_external_login", lambda *a, **k: pytest.fail("finalized")
     )
     victim = service.begin_login(
-        object(), tenant=tenant, return_path="/applications", store=store, config=CONFIG
+        object(),
+        tenant=tenant,
+        return_path="/applications",
+        store=store,
+        config=provider_config,
     )
     before = len(store)
 
@@ -184,7 +199,7 @@ def test_a_mismatched_callback_does_not_burn_the_ceremony(
             stored_state="a-cookie-from-somewhere-else",
             code="an-authorization-code",
             store=store,
-            config=CONFIG,
+            config=provider_config,
         )
 
     assert len(store) == before, (
@@ -197,7 +212,7 @@ def test_a_mismatched_callback_does_not_burn_the_ceremony(
 
 
 def test_the_matching_pair_still_completes(
-    store: Any, monkeypatch: pytest.MonkeyPatch, idp: Any
+    store: Any, monkeypatch: pytest.MonkeyPatch, idp: Any, provider_config: Any
 ) -> None:
     """The negative control, and the pilot's end-to-end evidence.
 
@@ -228,7 +243,11 @@ def test_the_matching_pair_still_completes(
     monkeypatch.setattr(service, "write_audit_event", lambda *a, **k: None)
 
     started = service.begin_login(
-        object(), tenant=tenant, return_path="/applications", store=store, config=CONFIG
+        object(),
+        tenant=tenant,
+        return_path="/applications",
+        store=store,
+        config=provider_config,
     )
     # What a real provider learns from the authorization request. Read back out
     # of the store rather than passed around, so the ceremony the package wrote
@@ -243,7 +262,7 @@ def test_the_matching_pair_still_completes(
         stored_state=started.state,
         code="an-authorization-code",
         store=store,
-        config=CONFIG,
+        config=provider_config,
     )
 
     assert completed.token == "a-session-token"
