@@ -137,6 +137,35 @@ def test_the_composed_flow_uses_the_postgres_store() -> None:
     assert isinstance(built, state_store.PostgresStateStore)
 
 
+def test_an_explicitly_supplied_store_is_never_silently_replaced() -> None:
+    """`is not None`, not truthiness — a regression, found by CI.
+
+    A store is an object with a `__len__`, so an EMPTY one is falsy. Written as
+    `store or _request_store(...)`, the first ceremony of every test — and of
+    any caller passing a fresh store — went to a real database store instead of
+    the one supplied. It failed loudly here because the double's session is
+    `object()`; in a caller holding a real session it would have failed
+    silently, writing to a table the caller never meant to touch.
+    """
+    supplied = _EmptyStore()
+    assert not supplied, "the double must be falsy or this proves nothing"
+
+    for func in (service.begin_login, service.complete_login):
+        source = inspect.getsource(func)
+        assert "store or " not in source, (
+            f"{func.__name__} selects its store by truthiness — an empty store "
+            "is falsy and would be replaced by a database one"
+        )
+        assert "store is not None" in source
+
+
+class _EmptyStore:
+    """Falsy, exactly as an empty `InMemoryStateStore` is."""
+
+    def __len__(self) -> int:
+        return 0
+
+
 def test_the_store_is_not_a_module_singleton() -> None:
     """Two requests, two stores.
 

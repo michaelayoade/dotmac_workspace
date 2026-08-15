@@ -202,8 +202,15 @@ def begin_login(
         raise LoginRefused from exc
 
     ttl = resolved.ceremony_ttl_seconds
-    ceremony_store = store or _request_store(
-        db, tenant=tenant, provider_binding=resolved.provider_binding
+    # `is not None`, never `store or ...`: a store is an object with a
+    # `__len__`, so an EMPTY one is falsy and the truthiness form silently
+    # replaces it with a real database store. CI caught exactly that.
+    ceremony_store = (
+        store
+        if store is not None
+        else _request_store(
+            db, tenant=tenant, provider_binding=resolved.provider_binding
+        )
     )
     ceremony_store.put(ceremony, ttl_seconds=ttl)
     return StartedLogin(
@@ -275,8 +282,12 @@ def complete_login(
         )
         raise LoginRefused
 
-    ceremony_store = store or _request_store(
-        db, tenant=tenant, provider_binding=resolved.provider_binding
+    ceremony_store = (
+        store
+        if store is not None
+        else _request_store(
+            db, tenant=tenant, provider_binding=resolved.provider_binding
+        )
     )
     ceremony = ceremony_store.take(state)
     if ceremony is None:
