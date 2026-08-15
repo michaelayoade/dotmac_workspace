@@ -4,9 +4,17 @@ The Workspace's login has never authenticated a human being. Its CI proves the
 protocol against a provider double that mints tokens with a throwaway key; this
 runbook is how it meets a real Keycloak, a real browser and a real member.
 
-**Status: prepared, not executed.** The target host is not provisioned yet.
-Everything below is written against that, and the two placeholders —
-`WORKSPACE_HOST` and `IDP_HOST` — are the only things that change when it is.
+**Status: the IdP is LIVE; the Workspace is not deployed yet.**
+
+`https://idp.dotmac.io/realms/dotmac` is serving: valid TLS, the permanent
+issuer, RS256 keys in JWKS, and the `dotmac-workspace` client already
+configured to the table in section 2. Section 2 is therefore a description of
+what exists, not instructions to follow — re-running it would be re-creating a
+client that is already there.
+
+The Workspace host is `94.72.104.67` (`workspace.dotmac.io`), provisioned and
+key-only, with nothing deployed on it yet. So sections 4 onward are still
+forward-looking.
 
 ## What this pilot is actually testing
 
@@ -31,7 +39,8 @@ a pilot is a person doing this rather than a script.
 
 ## 1. Prerequisites
 
-- A provisioned host, named by Michael. **Nothing here infers one.**
+- The Workspace host: `94.72.104.67`, hostname `workspace`, key-only SSH from
+  this Mac and seabone. Root credential in `secret/dotmac/hosts/workspace`.
 - A DNS name resolving to it, and TLS terminating in front — the redirect URI
   must be `https`, and the package refuses an `http` token endpoint outright.
 - Reachability from the app host to the fleet Postgres (`db-primary`) and to the
@@ -54,17 +63,24 @@ are the difference between a pilot and a liability.
 | Direct access grants | **Off** | password grant; the Workspace holds no passwords and must not learn any |
 | Service accounts | **Off** | nothing here acts as itself |
 | PKCE method | **S256** | `plain` sends the verifier in the authorization request, which is the interception PKCE exists to defeat |
-| Valid redirect URI | `https://WORKSPACE_HOST/login/callback` | EXACT. No wildcard, no trailing `*` |
+| Valid redirect URI | `https://workspace.dotmac.io/login/callback` | EXACT. No wildcard, no trailing `*` |
 | Web origins | `+` or empty | the Workspace makes no cross-origin call to Keycloak |
 
-A wildcard redirect URI deserves its own sentence: `https://WORKSPACE_HOST/*`
+A wildcard redirect URI deserves its own sentence: `https://workspace.dotmac.io/*`
 would let anyone who can get an authorization request issued redirect the code
 to any path on the host, and the pilot would still appear to work.
 
-Record the generated client secret straight into OpenBao — do not paste it into
-a terminal, a compose file or `.env`:
+The client secret is ALREADY in OpenBao at
 
     secret/dotmac/workspace/oidc/client-secret#value
+
+alongside `client_id`, `realm`, `issuer` and `redirect_uri`. It was captured
+straight from the admin API into the store and has never been pasted into a
+terminal, a compose file or `.env`.
+
+`idp:/opt/keycloak/verify.sh` asserts the realm and client settings above
+against the COMPLETE client object, so drift is detectable rather than assumed.
+Run it before the pilot rather than re-reading the table.
 
 ## 3. The database
 
