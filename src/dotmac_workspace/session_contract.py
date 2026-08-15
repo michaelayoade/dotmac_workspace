@@ -37,6 +37,14 @@ from typing import Final
 #: The Workspace's session cookie. Deliberately NOT `access_token`.
 SESSION_COOKIE: Final[str] = "dmws_session"
 
+#: Binds a login ceremony to the BROWSER that started it. Set when `/login` is
+#: POSTed, required to match the callback's `state` query parameter, cleared on
+#: every callback outcome. Without it the `state` parameter proves only that a
+#: ceremony exists — not that this browser began it — and a callback URL
+#: forwarded to a victim signs them in as the attacker. See
+#: `identity.service.complete_login` and `tests/test_login_csrf.py`.
+LOGIN_STATE_COOKIE: Final[str] = "dmws_login_state"
+
 #: Where an unauthenticated visitor is sent, and where the ceremony begins.
 LOGIN_PATH: Final[str] = "/login"
 
@@ -55,6 +63,7 @@ __all__ = [
     "CALLBACK_PATH",
     "DEFAULT_LANDING_PATH",
     "LOGIN_PATH",
+    "LOGIN_STATE_COOKIE",
     "LOGOUT_PATH",
     "SESSION_COOKIE",
 ]

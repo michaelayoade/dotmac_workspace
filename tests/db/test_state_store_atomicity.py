@@ -2,7 +2,7 @@
 
 ## Why this cannot be a unit test
 
-`PostgresStateStore.consume` is one statement:
+`PostgresStateStore.take` is one statement:
 
     DELETE FROM public.workspace_login_states
      WHERE tenant_id = :tenant_id AND state_hash = :state_hash
@@ -71,7 +71,8 @@ CONSUME_SQL = (
     "WHERE tenant_id = :tenant_id "
     "  AND state_hash = :state_hash "
     "  AND expires_at > now() "
-    "RETURNING code_verifier, nonce, return_path, provider_binding"
+    "RETURNING code_verifier, nonce, redirect_uri, return_to, issued_at, "
+    "provider_binding"
 )
 
 
@@ -117,10 +118,11 @@ def ceremony(admin_engine: Engine) -> Iterator[tuple[str, str, str]]:
             text(
                 "INSERT INTO public.workspace_login_states ("
                 " id, tenant_id, state_hash, code_verifier, nonce,"
-                " return_path, provider_binding, expires_at"
+                " redirect_uri, return_to, issued_at, provider_binding, expires_at"
                 ") VALUES ("
                 " :id, :tenant_id, :state_hash, :verifier, :nonce,"
-                " :return_path, :binding, now() + interval '10 minutes'"
+                " :redirect_uri, :return_to, :issued_at, :binding,"
+                " now() + interval '10 minutes'"
                 ")"
             ),
             {
@@ -129,7 +131,9 @@ def ceremony(admin_engine: Engine) -> Iterator[tuple[str, str, str]]:
                 "state_hash": _state_hash(state),
                 "verifier": verifier,
                 "nonce": "nonce-value",
-                "return_path": "/applications",
+                "redirect_uri": "https://ws.example.net/login/callback",
+                "return_to": "/applications",
+                "issued_at": 1_770_000_000,
                 "binding": "primary",
             },
         )

@@ -26,6 +26,7 @@ from dotmac_workspace.launcher import web as launcher_web
 from dotmac_workspace.session_contract import (
     CALLBACK_PATH,
     LOGIN_PATH,
+    LOGIN_STATE_COOKIE,
     LOGOUT_PATH,
     SESSION_COOKIE,
 )
@@ -116,8 +117,11 @@ def test_logout_is_a_post_and_never_a_get() -> None:
 
 def test_the_callback_is_a_get_because_the_protocol_says_so() -> None:
     """The authorization-code flow ends in a browser redirect, so the method is
-    not this assembly's to choose. What protects it is the opaque single-use
-    state, which no forged callback can produce — see `state_store.py`."""
+    not this assembly's to choose. What protects it is the PAIR: the opaque
+    single-use state, which no forged callback can produce, AND the host-only
+    cookie holding the same value, which an attacker cannot write onto somebody
+    else's browser. The state alone would leave the callback open to login CSRF
+    — see `tests/test_login_csrf.py`."""
     assert _methods(CALLBACK_PATH) == {"GET"}
 
 
@@ -180,6 +184,102 @@ def test_clearing_uses_the_same_attributes_as_setting() -> None:
     assert "httponly" in cleared
     assert "samesite=lax" in cleared
     assert "domain=" not in cleared
+
+
+# ── 2b. the ceremony cookie ─────────────────────────────────────────────────
+
+
+def _state_cookie_header(secure: bool) -> str:
+    response = Response()
+    session.attach_state_cookie(
+        response,
+        state="a-ceremony-state",
+        expires_at=datetime.now(UTC) + timedelta(minutes=10),
+        secure=secure,
+    )
+    return response.headers["set-cookie"]
+
+
+def test_the_state_cookie_is_host_only_httponly_and_lax() -> None:
+    """Each attribute earns its place, and `lax` is REQUIRED rather than merely
+    acceptable: the callback arrives as a top-level cross-site GET redirect
+    from the identity provider, and `strict` would withhold the cookie on
+    exactly that navigation — breaking every legitimate login while appearing
+    to be the safer setting."""
+    header = _state_cookie_header(secure=True).lower()
+    assert LOGIN_STATE_COOKIE in header
+    assert "httponly" in header
+    assert "samesite=lax" in header
+    assert "domain=" not in header, (
+        "the ceremony cookie declared a Domain. A cookie a sibling host can "
+        "set is a cookie an attacker with a foothold on any such host can "
+        "plant — which hands the CSRF attack straight back."
+    )
+
+
+def test_the_state_cookie_is_scoped_to_the_callback_alone() -> None:
+    """Only one route reads it, so it is sent to only one route."""
+    header = _state_cookie_header(secure=True).lower()
+    assert f"path={CALLBACK_PATH}".lower() in header
+
+
+def test_the_state_cookie_is_secure_under_tls_and_not_otherwise() -> None:
+    assert "secure" in _state_cookie_header(secure=True).lower()
+    assert "secure" not in _state_cookie_header(secure=False).lower()
+
+
+def test_clearing_the_state_cookie_uses_the_same_attributes() -> None:
+    """`path` here is NOT `/`, so a mismatch is easier to make and has the same
+    consequence: the original cookie stays in the browser."""
+    response = Response()
+    session.clear_state_cookie(response, secure=True)
+    cleared = response.headers["set-cookie"].lower()
+    assert LOGIN_STATE_COOKIE in cleared
+    assert f"path={CALLBACK_PATH}".lower() in cleared
+    assert "httponly" in cleared
+    assert "samesite=lax" in cleared
+    assert "domain=" not in cleared
+
+
+def test_the_state_cookie_is_not_the_session_cookie() -> None:
+    """Two values, two lifetimes, two paths. Reusing one name would make the
+    callback's clear-on-completion delete the session it just issued."""
+    assert LOGIN_STATE_COOKIE != SESSION_COOKIE
+
+
+def test_every_callback_outcome_clears_the_state_cookie() -> None:
+    """A ceremony that has been answered is over, whichever way it went, and a
+    state cookie left behind can only ever produce a later refusal.
+
+    Asserted against the route's SYNTAX rather than by driving four responses:
+    every `return` in `callback` must go through the one helper that clears it,
+    so a new refusal branch cannot forget.
+    """
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(web.callback))
+    returns = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Return) and node.value is not None
+    ]
+    # The helper's own `return response` is one of them.
+    wrapped = [
+        node
+        for node in returns
+        if isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "_done"
+    ]
+    assert len(wrapped) == len(returns) - 1, (
+        "a `return` in the callback does not pass through `_done`, so that "
+        "outcome leaves the ceremony cookie in the browser"
+    )
+    assert len(wrapped) >= 4, (
+        f"only {len(wrapped)} wrapped returns — the callback's refusal branches "
+        "have moved and this guard is no longer watching them"
+    )
 
 
 # ── 3. no mutation on a GET, no bare form ───────────────────────────────────

@@ -4,17 +4,19 @@
 
 ## The whole flow, and where each guarantee comes from
 
-    POST /login          begin_login   -> opaque state stored, browser sent away
-    GET  /login/callback complete_login-> state consumed once, code redeemed,
+    POST /login          begin_login   -> opaque state stored AND cookied,
+                                          browser sent away
+    GET  /login/callback complete_login-> state pair matched, ceremony taken
                                           ID token verified, binding finalized,
                                           session minted in the SAME transaction
     POST /logout         end_session   -> session revoked, cookie cleared
 
 | guarantee | who provides it |
 |---|---|
-| the callback belongs to the browser that started | PKCE S256, `oidc` |
+| this browser is the one that started | the state pair: query vs cookie |
+| an intercepted authorization code is useless | PKCE S256, `oidc` |
 | the ID token belongs to THIS ceremony | `nonce`, `oidc` |
-| a ceremony is used at most once, on any worker | `DELETE … RETURNING`, `state_store` |
+| a ceremony is used at most once, on any worker | `DELETE … RETURNING` |
 | an unbound subject cannot log in | `finalize_external_login` returning `None` |
 | a disable cannot race a login | `finalize_external_login`'s row lock |
 | the session cannot outrun the decision | one transaction, one commit |
@@ -76,8 +78,10 @@ the binding that fixes it — and never rendered.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from secrets import compare_digest
 from uuid import UUID
 
 from dotmac_kernel.audit import write_audit_event
@@ -88,7 +92,7 @@ from sqlalchemy.orm import Session
 from dotmac_workspace.identity import oidc, session
 from dotmac_workspace.identity.config import ProviderConfig, provider
 from dotmac_workspace.identity.state_store import (
-    LoginCeremony,
+    LoginState,
     PostgresStateStore,
     StateStore,
 )
@@ -100,14 +104,47 @@ logger = logging.getLogger(__name__)
 LOGIN_SUCCEEDED = "workspace.login.succeeded"
 LOGOUT = "workspace.logout"
 
-#: The shared, atomic store. A module-level singleton because it holds no
-#: state — every method takes the caller's session — and because the ONE thing
-#: that must never be configurable is which store a production process uses.
-_STORE: StateStore = PostgresStateStore()
+
+def _request_store(db: Session, *, tenant: Tenant, provider_binding: str) -> StateStore:
+    """The shared, atomic store, bound to THIS request.
+
+    Built per call rather than held as a module singleton, because it holds the
+    request's `Session`. `dotmac_kernel.db` owns when a transaction opens and
+    commits (hard rule 8), so a store that held a session of its own would be a
+    second transaction authority: the ceremony would commit at a different
+    moment from everything else the request did, and a rolled-back request
+    would leave a live ceremony behind.
+
+    There is deliberately no configuration knob. Which store a production
+    process uses is the one thing that must never be selectable — a per-worker
+    store one environment variable away is how a login becomes a coin flip.
+    The `store` parameter below exists for tests, and there is no in-memory
+    implementation anywhere under `src/` for it to reach.
+    """
+    return PostgresStateStore(
+        db, tenant_id=tenant.id, provider_binding=provider_binding
+    )
 
 
 class LoginRefused(Exception):
     """The ceremony did not produce a session. One type, no reason field."""
+
+
+@dataclass(frozen=True, slots=True)
+class StartedLogin:
+    """Where to send the browser, and the value that must come back on it.
+
+    `state` is returned so the ADAPTER can set it as a host-only cookie. The
+    query parameter alone proves a ceremony exists; only a value the attacker
+    cannot write onto the victim's browser proves that THIS browser started it.
+    See `tests/test_login_csrf.py`.
+    """
+
+    url: str
+    state: str
+    #: When the ceremony row stops being valid. The cookie is given the same
+    #: lifetime, so the browser forgets it instead of holding a dead value.
+    expires_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,9 +163,9 @@ def begin_login(
     *,
     tenant: Tenant,
     return_path: str,
-    store: StateStore = _STORE,
+    store: StateStore | None = None,
     config: ProviderConfig | None = None,
-) -> str:
+) -> StartedLogin:
     """Start a ceremony and return where to send the browser.
 
     `return_path` has already been reduced to a same-origin absolute path by
@@ -142,12 +179,13 @@ def begin_login(
     500 whose traceback names an HTTP client.
     """
     resolved = config or provider()
-    state = oidc.new_state()
-    ceremony = LoginCeremony(
-        code_verifier=oidc.new_code_verifier(),
+    ceremony = LoginState(
+        state_id=oidc.new_state(),
         nonce=oidc.new_nonce(),
-        return_path=return_path,
-        provider_binding=resolved.provider_binding,
+        code_verifier=oidc.new_code_verifier(),
+        redirect_uri=resolved.redirect_url,
+        issued_at=int(time.time()),
+        return_to=return_path,
     )
     try:
         # Discovery BEFORE the row: a ceremony written for a login that could
@@ -163,19 +201,21 @@ def begin_login(
         )
         raise LoginRefused from exc
 
-    store.start(
-        db,
-        tenant_id=tenant.id,
-        state=state,
-        ceremony=ceremony,
-        expires_at=datetime.now(UTC) + timedelta(seconds=resolved.ceremony_ttl_seconds),
+    ttl = resolved.ceremony_ttl_seconds
+    ceremony_store = store or _request_store(
+        db, tenant=tenant, provider_binding=resolved.provider_binding
     )
-    return oidc.authorization_url(
-        resolved,
-        metadata,
-        state=state,
-        nonce=ceremony.nonce,
-        verifier=ceremony.code_verifier,
+    ceremony_store.put(ceremony, ttl_seconds=ttl)
+    return StartedLogin(
+        url=oidc.authorization_url(
+            resolved,
+            metadata,
+            state=ceremony.state_id,
+            nonce=ceremony.nonce,
+            verifier=ceremony.code_verifier,
+        ),
+        state=ceremony.state_id,
+        expires_at=datetime.now(UTC) + timedelta(seconds=ttl),
     )
 
 
@@ -184,15 +224,35 @@ def complete_login(
     *,
     tenant: Tenant,
     state: str,
+    stored_state: str | None,
     code: str,
-    store: StateStore = _STORE,
+    store: StateStore | None = None,
     config: ProviderConfig | None = None,
     request_id: str | None = None,
 ) -> CompletedLogin:
     """Finish a ceremony, or raise `LoginRefused`.
 
+    `state` is the query parameter the provider echoed; `stored_state` is the
+    host-only cookie this deployment set when the ceremony started. BOTH are
+    required and they must match.
+
+    That pair is the whole defence against login CSRF, and it is not
+    interchangeable with the checks below. An attacker can authenticate
+    honestly as themselves, obtain a perfectly valid `code` and `state`, and
+    send that callback URL to a victim; the victim's browser opens it and
+    Workspace mints a session for the ATTACKER on the VICTIM's browser. PKCE
+    does not help — the verifier never left this server, so the exchange
+    succeeds. Nor does the state alone: resolving to a stored ceremony proves
+    the ceremony EXISTS, not that this browser started it. Only a value the
+    attacker cannot write onto the victim's browser proves that.
+
+    Checked FIRST, before the ceremony is consumed, so a forged callback cannot
+    burn a ceremony that belongs to somebody else — see
+    `tests/test_login_csrf.py` for why that ordering is deliberate.
+
     The ordering below is the security property, not a style choice:
 
+    0. **bind to the browser.** Query state and cookie state must match.
     1. **consume first.** The ceremony is taken atomically before anything
        expensive happens, so a replayed callback is refused without a round
        trip to the provider — and so a state can never be spent twice even if
@@ -207,7 +267,18 @@ def complete_login(
     """
     resolved = config or provider()
 
-    ceremony = store.consume(db, tenant_id=tenant.id, state=state)
+    if not state or not stored_state or not compare_digest(state, stored_state):
+        logger.warning(
+            "Workspace login refused for tenant %s: the callback state does not "
+            "match the browser's ceremony cookie",
+            tenant.id,
+        )
+        raise LoginRefused
+
+    ceremony_store = store or _request_store(
+        db, tenant=tenant, provider_binding=resolved.provider_binding
+    )
+    ceremony = ceremony_store.take(state)
     if ceremony is None:
         logger.warning(
             "Workspace login refused: no live ceremony for the presented state "
@@ -235,7 +306,7 @@ def complete_login(
     identity = finalize_external_login(
         db,
         tenant=tenant,
-        provider_binding=ceremony.provider_binding,
+        provider_binding=resolved.provider_binding,
         issuer=verified.issuer,
         subject=verified.subject,
     )
@@ -252,7 +323,7 @@ def complete_login(
             verified.issuer,
             verified.subject,
             tenant.id,
-            ceremony.provider_binding,
+            resolved.provider_binding,
         )
         raise LoginRefused
 
@@ -273,7 +344,7 @@ def complete_login(
             # interim use, and because a shadow column in this assembly would
             # make it a second writer of session revocation.
             "external_identity_binding_id": str(identity.binding_id),
-            "provider_binding": ceremony.provider_binding,
+            "provider_binding": resolved.provider_binding,
             "issuer": verified.issuer,
         },
     )
@@ -282,7 +353,7 @@ def complete_login(
         party=identity.party,
         token=token,
         expires_at=auth_session.expires_at,
-        return_path=ceremony.return_path,
+        return_path=ceremony.return_to,
         binding_id=identity.binding_id,
     )
 

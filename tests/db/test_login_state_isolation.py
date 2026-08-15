@@ -62,10 +62,11 @@ def two_ceremonies(admin_engine: Engine) -> Iterator[tuple[str, str, str]]:
                 text(
                     f"INSERT INTO {TABLE} ("
                     " id, tenant_id, state_hash, code_verifier, nonce,"
-                    " return_path, provider_binding, expires_at"
+                    " redirect_uri, return_to, issued_at, provider_binding, expires_at"
                     ") VALUES ("
                     " :id, :tenant_id, :state_hash, :verifier, :nonce,"
-                    " :return_path, :binding, now() + interval '10 minutes'"
+                    " :redirect_uri, :return_to, :issued_at, :binding,"
+                    " now() + interval '10 minutes'"
                     ")"
                 ),
                 {
@@ -74,7 +75,9 @@ def two_ceremonies(admin_engine: Engine) -> Iterator[tuple[str, str, str]]:
                     "state_hash": _state_hash(state),
                     "verifier": f"verifier-for-{index}",
                     "nonce": f"nonce-for-{index}",
-                    "return_path": "/applications",
+                    "redirect_uri": "https://ws.example.net/login/callback",
+                    "return_to": "/applications",
+                    "issued_at": 1_770_000_000,
                     "binding": "primary",
                 },
             )
@@ -191,10 +194,11 @@ def test_a_ceremony_cannot_be_written_for_another_tenant(
             text(
                 f"INSERT INTO {TABLE} ("
                 " id, tenant_id, state_hash, code_verifier, nonce,"
-                " return_path, provider_binding, expires_at"
+                " redirect_uri, return_to, issued_at, provider_binding, expires_at"
                 ") VALUES ("
                 " :id, :tenant_id, :state_hash, 'planted', 'planted',"
-                " '/applications', 'primary', now() + interval '10 minutes'"
+                " 'https://ws.example.net/login/callback', '/applications',"
+                " 1770000000, 'primary', now() + interval '10 minutes'"
                 ")"
             ),
             {

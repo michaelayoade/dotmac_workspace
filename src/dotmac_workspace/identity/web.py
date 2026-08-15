@@ -29,16 +29,30 @@ exemption here.
 
 The authorization-code flow ends in a browser redirect, so the method is not
 this assembly's to choose. What protects it is not the CSRF header bridge —
-which no cross-site redirect could carry — but the `state` parameter, which is
-what `state` has always been for:
+which no cross-site redirect could carry — but a PAIR of values that must
+match:
 
-* it is a 256-bit random this server generated,
-* it resolves to a row only a browser that STARTED a ceremony could have, and
-* consuming it is a single `DELETE … RETURNING`, so it works exactly once, on
-  whichever worker the load balancer picks.
+* the `state` query parameter the provider echoed back, and
+* the `dmws_login_state` cookie this server set when the ceremony started.
 
-A forged callback carries a state that resolves to nothing, and gets the same
-refusal as an expired one. See `state_store.py`.
+The state alone is not enough, and an earlier version of this module argued
+that it was. It is a 256-bit random this server generated, it resolves to a row
+only a browser that STARTED a ceremony could have, and consuming it is a single
+`DELETE … RETURNING`, so it works exactly once on whichever worker the load
+balancer picks. All true — and all beside the point. Those properties establish
+that A ceremony exists; they say nothing about WHICH browser is standing in
+front of the callback. An attacker who authenticates honestly as themselves
+holds a valid `code` and a valid `state`, and forwarding that URL to a victim
+would sign the victim in as the attacker. PKCE cannot see this either: the
+verifier never left this server, so the exchange succeeds.
+
+The cookie is the half an attacker cannot supply, because they cannot write a
+host-only cookie onto somebody else's browser. `service.complete_login`
+requires both and compares them with `secrets.compare_digest`; the comparison
+happens BEFORE the state is consumed, so a forged callback cannot burn a
+ceremony belonging to someone else. See `session.py` for the cookie's
+attributes, `state_store.py` for the row, and `tests/test_login_csrf.py` for
+the attack driven end to end.
 
 ## Every refusal looks the same
 
@@ -68,12 +82,18 @@ from dotmac_workspace.identity.config import (
     ProviderNotConfiguredError,
     provider_or_none,
 )
-from dotmac_workspace.identity.session import attach_cookie, clear_cookie
+from dotmac_workspace.identity.session import (
+    attach_cookie,
+    attach_state_cookie,
+    clear_cookie,
+    clear_state_cookie,
+)
 from dotmac_workspace.page import render_page
 from dotmac_workspace.session_contract import (
     CALLBACK_PATH,
     DEFAULT_LANDING_PATH,
     LOGIN_PATH,
+    LOGIN_STATE_COOKIE,
     LOGOUT_PATH,
     SESSION_COOKIE,
 )
@@ -168,7 +188,7 @@ def begin_login(
     starting a login is a mutation and why a GET here would be login CSRF.
     """
     try:
-        url = service.begin_login(
+        started = service.begin_login(
             db,
             tenant=tenant,
             return_path=safe_next_url(next_path, default=DEFAULT_LANDING_PATH),
@@ -182,8 +202,23 @@ def begin_login(
         return _refusal("Sign-in could not be started.", status_code=502)
 
     if request.headers.get(HTMX_HEADER):
-        return Response(status_code=200, headers={HTMX_REDIRECT_HEADER: url})
-    return RedirectResponse(url, status_code=303)
+        response: Response = Response(
+            status_code=200, headers={HTMX_REDIRECT_HEADER: started.url}
+        )
+    else:
+        response = RedirectResponse(started.url, status_code=303)
+    # Both shapes carry the cookie: the htmx one is still a real response the
+    # browser processes before navigating, and a login started through htmx
+    # that skipped this would arrive at the callback with no cookie and be
+    # refused — a working attack defence that breaks the ordinary path is not
+    # a defence anyone keeps.
+    attach_state_cookie(
+        response,
+        state=started.state,
+        expires_at=started.expires_at,
+        secure=is_secure_request(request),
+    )
+    return response
 
 
 @router.get(CALLBACK_PATH)
@@ -197,6 +232,14 @@ def callback(
 ) -> Response:
     """Finish the ceremony, or refuse.
 
+    The `state` query parameter and the `dmws_login_state` cookie are both
+    passed to the service, which requires them to match — see the module
+    docstring for why either one alone is not a defence. This adapter reads the
+    cookie and makes no decision about it.
+
+    Whatever happens, the state cookie is cleared: the ceremony has been
+    answered, and a value left behind can only ever produce a later refusal.
+
     On success the response carries two things and they belong together: the
     `dmws_session` cookie, and a redirect to where the member was going. The
     session row behind that cookie was added inside THIS request's transaction,
@@ -205,6 +248,14 @@ def callback(
     session. `dotmac_kernel.db` commits at the end of the request, and that
     commit is what releases the lock.
     """
+    secure = is_secure_request(request)
+
+    def _done(response: Response) -> Response:
+        """Every exit from this route goes through here. A `return` that
+        skipped it would leave the ceremony cookie in the browser."""
+        clear_state_cookie(response, secure=secure)
+        return response
+
     if error:
         # The provider declined. Logged with its own code; shown as the same
         # refusal as everything else.
@@ -213,34 +264,37 @@ def callback(
             tenant.id,
             error,
         )
-        return _refusal("Sign-in was not completed.", status_code=403)
+        return _done(_refusal("Sign-in was not completed.", status_code=403))
     if not code or not state:
-        return _refusal("Sign-in was not completed.", status_code=400)
+        return _done(_refusal("Sign-in was not completed.", status_code=400))
 
     try:
         completed = service.complete_login(
             db,
             tenant=tenant,
             state=state,
+            stored_state=request.cookies.get(LOGIN_STATE_COOKIE),
             code=code,
             request_id=getattr(request.state, "request_id", None),
         )
     except ProviderNotConfiguredError:
-        return _refusal(
-            "Federated sign-in is not configured for this workspace.",
-            status_code=503,
+        return _done(
+            _refusal(
+                "Federated sign-in is not configured for this workspace.",
+                status_code=503,
+            )
         )
     except service.LoginRefused:
-        return _refusal("Sign-in was not completed.", status_code=403)
+        return _done(_refusal("Sign-in was not completed.", status_code=403))
 
     response = RedirectResponse(completed.return_path, status_code=303)
     attach_cookie(
         response,
         token=completed.token,
         expires_at=completed.expires_at,
-        secure=is_secure_request(request),
+        secure=secure,
     )
-    return response
+    return _done(response)
 
 
 @router.post(LOGOUT_PATH)

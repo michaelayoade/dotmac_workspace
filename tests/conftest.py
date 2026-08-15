@@ -41,13 +41,24 @@ under READ COMMITTED, and the nearest single-threaded analogue is the
 dictionary `pop` below. That is enough for the flow tests that need somewhere
 to put a ceremony; it is not evidence of the property, which is proven against
 a real PostgreSQL in `tests/db/test_state_store_atomicity.py`.
+
+## What this double deliberately no longer models
+
+Tenant scoping. `PostgresStateStore` is constructed per request and holds the
+tenant, so scoping lives in a SQL predicate and an RLS policy — neither of
+which a dictionary can stand in for. A double that keyed its rows by tenant
+would look like it proved isolation while proving only its own bookkeeping;
+`tests/db/test_login_state_isolation.py` proves the real thing against a
+migrated database with RLS FORCEd.
+
+Provider-binding pinning is likewise the real store's, and for the same
+reason — it is a column it writes and a check it makes on the way out.
 """
 
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime
-from uuid import UUID
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -57,44 +68,42 @@ os.environ.setdefault(
 
 # Imported AFTER the URL above is set — see the first section of this docstring.
 from dotmac_workspace.identity.state_store import (
-    LoginCeremony,
+    LoginState,
     state_hash,
 )
 
 
 class InMemoryStateStore:
-    """Satisfies `StateStore`. Never reachable from `src/`."""
+    """Satisfies `StateStore` — `put`/`take`. Never reachable from `src/`.
+
+    The same two methods `dotmac_auth_oidc.state.StateStore` declares, so a
+    test written against this double keeps meaning the same thing after the
+    published package replaces the local client.
+    """
 
     def __init__(self) -> None:
-        self._rows: dict[tuple[str, str], tuple[LoginCeremony, datetime]] = {}
+        self._rows: dict[str, tuple[LoginState, datetime]] = {}
 
-    def start(
-        self,
-        db: object,
-        *,
-        tenant_id: UUID,
-        state: str,
-        ceremony: LoginCeremony,
-        expires_at: datetime,
-    ) -> None:
-        self._rows[(str(tenant_id), state_hash(state))] = (ceremony, expires_at)
+    def put(self, state: LoginState, *, ttl_seconds: int) -> None:
+        self._rows[state_hash(state.state_id)] = (
+            state,
+            datetime.now(UTC) + timedelta(seconds=ttl_seconds),
+        )
 
-    def consume(
-        self, db: object, *, tenant_id: UUID, state: str
-    ) -> LoginCeremony | None:
+    def take(self, state_id: str) -> LoginState | None:
         """`pop` — the nearest single-threaded analogue of `DELETE … RETURNING`.
 
         Expiry is checked here for the same reason the SQL checks it in the
         statement: a ceremony that has run out of time must be refused whether
         or not anything has swept it.
         """
-        found = self._rows.pop((str(tenant_id), state_hash(state)), None)
+        found = self._rows.pop(state_hash(state_id), None)
         if found is None:
             return None
-        ceremony, expires_at = found
+        state, expires_at = found
         if expires_at <= datetime.now(UTC):
             return None
-        return ceremony
+        return state
 
     def __len__(self) -> int:
         return len(self._rows)

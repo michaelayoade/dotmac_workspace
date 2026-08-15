@@ -24,6 +24,8 @@ from __future__ import annotations
 import ast
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
+from uuid import uuid4
 
 from dotmac_workspace.identity import service, state_store
 
@@ -121,8 +123,37 @@ def test_the_composed_flow_uses_the_postgres_store() -> None:
 
     The negative guard alone would pass in a repository that had deleted the
     store entirely.
+
+    Asserted through `_request_store`, which is where the composed flow now
+    decides: the store is constructed per request because it holds that
+    request's `Session` (hard rule 8 — `dotmac_kernel.db` owns the
+    transaction), so there is no module singleton left to point at.
     """
-    assert isinstance(service._STORE, state_store.PostgresStateStore)
+    built = service._request_store(
+        object(),  # type: ignore[arg-type]
+        tenant=SimpleNamespace(id=uuid4()),  # type: ignore[arg-type]
+        provider_binding="primary",
+    )
+    assert isinstance(built, state_store.PostgresStateStore)
+
+
+def test_the_store_is_not_a_module_singleton() -> None:
+    """Two requests, two stores.
+
+    A singleton would have to hold a session from somewhere, and the only
+    session available at import time is one nobody's request owns.
+    """
+    first = service._request_store(
+        object(),  # type: ignore[arg-type]
+        tenant=SimpleNamespace(id=uuid4()),  # type: ignore[arg-type]
+        provider_binding="primary",
+    )
+    second = service._request_store(
+        object(),  # type: ignore[arg-type]
+        tenant=SimpleNamespace(id=uuid4()),  # type: ignore[arg-type]
+        provider_binding="primary",
+    )
+    assert first is not second
 
 
 def test_consuming_a_ceremony_is_one_statement() -> None:

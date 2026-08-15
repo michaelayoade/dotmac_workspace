@@ -46,6 +46,18 @@ it succeeded.
 ceremony, and a database dump, a replica or a logged query plan should not hand
 anybody a usable one.
 
+## The column names are `dotmac_auth_oidc.LoginState`'s field names
+
+Not a coincidence and not cosmetic. This assembly is the pilot adopter of that
+package, and the store here satisfies its `StateStore` protocol structurally.
+Columns that merely resembled the dataclass would need translating at the seam,
+which is exactly where a `nonce` and a `return_to` get transposed and nobody
+notices until a login completes against the wrong ceremony.
+
+`provider_binding` is the one column with no field behind it, deliberately: it
+names which local registration a ceremony belongs to, which is this
+deployment's vocabulary rather than the protocol's.
+
 Revision ID: a001_login_ceremony_state
 Revises: (lineage root)
 Create Date: 2026-08-15
@@ -89,9 +101,18 @@ def upgrade() -> None:
         # PKCE. 43 to 128 characters by RFC 7636; this client generates 86.
         sa.Column("code_verifier", sa.String(128), nullable=False),
         sa.Column("nonce", sa.String(64), nullable=False),
+        # The redirect URI this ceremony was started with. Round-tripped
+        # because the token exchange must present the SAME value it asked for
+        # — a provider that is sent a different one refuses, and correctly.
+        sa.Column("redirect_uri", sa.String(500), nullable=False),
         # Where the member was going. Stored here rather than carried through
         # the provider, so nothing echoed back can become an open redirect.
-        sa.Column("return_path", sa.String(500), nullable=False),
+        sa.Column("return_to", sa.String(500), nullable=False),
+        # Unix seconds. Separate from `expires_at`, which is this table's own
+        # housekeeping deadline: `issued_at` is the ceremony's age as the OIDC
+        # client measures it, and the client re-checks its own TTL against it
+        # so a store with coarse expiry cannot extend a login's life.
+        sa.Column("issued_at", sa.BigInteger(), nullable=False),
         # WHICH configured provider registration this ceremony belongs to —
         # the trusted half of the kernel's resolution tuple. 80 characters
         # matches `external_identity_bindings.provider_binding`.

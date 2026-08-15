@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
-from datetime import UTC, datetime, timedelta
+import time
 from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -25,7 +25,7 @@ import pytest
 
 from dotmac_workspace.identity import oidc, service
 from dotmac_workspace.identity.config import ProviderConfig
-from dotmac_workspace.identity.state_store import LoginCeremony, state_hash
+from dotmac_workspace.identity.state_store import LoginState, state_hash
 
 # The `store` parameter throughout is the `store` FIXTURE from
 # `tests/conftest.py` — an in-memory `StateStore` that is deliberately not an
@@ -73,7 +73,7 @@ def test_the_authorization_request_carries_state_nonce_and_an_s256_challenge(
     tenant = _tenant()
     url = service.begin_login(
         object(), tenant=tenant, return_path="/applications", store=store, config=CONFIG
-    )
+    ).url
     query = parse_qs(urlparse(url).query)
 
     assert query["response_type"] == ["code"]
@@ -104,15 +104,15 @@ def test_the_verifier_and_the_return_path_never_leave_the_server(
         return_path="/applications",
         store=store,
         config=CONFIG,
-    )
+    ).url
     state = parse_qs(urlparse(url).query)["state"][0]
-    ceremony = store.consume(object(), tenant_id=tenant.id, state=state)
+    ceremony = store.take(state)
     assert ceremony is not None
 
     assert ceremony.code_verifier not in url
     assert ceremony.nonce in url, "the nonce is a request parameter by design"
     assert "applications" not in urlparse(url).query
-    assert ceremony.return_path == "/applications"
+    assert ceremony.return_to == "/applications"
 
 
 def test_the_challenge_is_the_sha256_of_the_stored_verifier(
@@ -121,9 +121,9 @@ def test_the_challenge_is_the_sha256_of_the_stored_verifier(
     tenant = _tenant()
     url = service.begin_login(
         object(), tenant=tenant, return_path="/applications", store=store, config=CONFIG
-    )
+    ).url
     query = parse_qs(urlparse(url).query)
-    ceremony = store.consume(object(), tenant_id=tenant.id, state=query["state"][0])
+    ceremony = store.take(query["state"][0])
     assert ceremony is not None
 
     expected = (
@@ -143,10 +143,10 @@ def test_the_state_is_stored_hashed_never_in_the_clear(
     tenant = _tenant()
     url = service.begin_login(
         object(), tenant=tenant, return_path="/applications", store=store, config=CONFIG
-    )
+    ).url
     state = parse_qs(urlparse(url).query)["state"][0]
-    assert (str(tenant.id), state_hash(state)) in store._rows
-    assert (str(tenant.id), state) not in store._rows
+    assert state_hash(state) in store._rows
+    assert state not in store._rows
 
 
 def test_two_logins_never_share_a_state(store: Any) -> None:
@@ -160,7 +160,7 @@ def test_two_logins_never_share_a_state(store: Any) -> None:
                     return_path="/applications",
                     store=store,
                     config=CONFIG,
-                )
+                ).url
             ).query
         )["state"][0]
         for _ in range(50)
@@ -172,17 +172,20 @@ def test_two_logins_never_share_a_state(store: Any) -> None:
 
 
 def _seed(store: Any, tenant: Any, *, state: str) -> None:
-    store.start(
-        object(),
-        tenant_id=tenant.id,
-        state=state,
-        ceremony=LoginCeremony(
-            code_verifier="v" * 43,
+    """`tenant` is unused now and kept for the call sites' readability: the
+    store is constructed per request with the tenant it belongs to, so a double
+    that keyed rows by tenant would be modelling its own bookkeeping rather
+    than the RLS policy that actually isolates them (see `conftest.py`)."""
+    store.put(
+        LoginState(
+            state_id=state,
             nonce="n" * 22,
-            return_path="/applications",
-            provider_binding="primary",
+            code_verifier="v" * 43,
+            redirect_uri=CONFIG.redirect_url,
+            issued_at=int(time.time()),
+            return_to="/applications",
         ),
-        expires_at=datetime.now(UTC) + timedelta(seconds=600),
+        ttl_seconds=600,
     )
 
 
@@ -203,6 +206,7 @@ def test_an_unknown_state_is_refused_without_contacting_the_provider(
             object(),
             tenant=_tenant(),
             state="never-issued",
+            stored_state="never-issued",
             code="anything",
             store=store,
             config=CONFIG,
@@ -230,6 +234,7 @@ def test_a_state_works_exactly_once(
             object(),
             tenant=tenant,
             state="s",
+            stored_state="s",
             code="c",
             store=store,
             config=CONFIG,
@@ -243,6 +248,7 @@ def test_a_state_works_exactly_once(
             object(),
             tenant=tenant,
             state="s",
+            stored_state="s",
             code="c",
             store=store,
             config=CONFIG,
@@ -253,37 +259,43 @@ def test_an_expired_ceremony_is_refused(
     store: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     tenant = _tenant()
-    store.start(
-        object(),
-        tenant_id=tenant.id,
-        state="s",
-        ceremony=LoginCeremony(
-            code_verifier="v" * 43,
+    store.put(
+        LoginState(
+            state_id="s",
             nonce="n" * 22,
-            return_path="/applications",
-            provider_binding="primary",
+            code_verifier="v" * 43,
+            redirect_uri=CONFIG.redirect_url,
+            issued_at=int(time.time()),
+            return_to="/applications",
         ),
-        expires_at=datetime.now(UTC) - timedelta(seconds=1),
+        ttl_seconds=-1,
     )
     with pytest.raises(service.LoginRefused):
         service.complete_login(
             object(),
             tenant=tenant,
             state="s",
+            stored_state="s",
             code="c",
             store=store,
             config=CONFIG,
         )
 
 
-def test_another_tenants_state_is_not_consumable(
-    store: Any,
-) -> None:
-    """Ceremony state is tenant-scoped in the key as well as by RLS."""
-    left, right = _tenant(), _tenant()
-    _seed(store, left, state="s")
-    assert store.consume(object(), tenant_id=right.id, state="s") is None
-    assert store.consume(object(), tenant_id=left.id, state="s") is not None
+def test_tenant_scoping_is_not_asserted_here() -> None:
+    """Deliberately empty, and recorded so the gap is a decision.
+
+    This file used to assert that one tenant could not consume another's
+    ceremony, against the in-memory double. That proved only the double's own
+    key tuple. The store is now constructed per request holding its tenant, so
+    scoping is a SQL predicate and an RLS policy — neither of which a
+    dictionary can stand in for.
+
+    The real property is proven against a migrated PostgreSQL with RLS FORCEd,
+    in `tests/db/test_login_state_isolation.py`. Moving an assertion to where
+    it can be true is not losing coverage; keeping it here would have been
+    keeping the appearance of it.
+    """
 
 
 def test_an_unbound_subject_is_refused_and_nothing_is_provisioned(
@@ -311,6 +323,7 @@ def test_an_unbound_subject_is_refused_and_nothing_is_provisioned(
             object(),
             tenant=tenant,
             state="s",
+            stored_state="s",
             code="c",
             store=store,
             config=CONFIG,
@@ -337,6 +350,7 @@ def test_a_provider_failure_is_the_same_refusal_as_an_unbound_subject(
             object(),
             tenant=tenant,
             state="s",
+            stored_state="s",
             code="c",
             store=store,
             config=CONFIG,

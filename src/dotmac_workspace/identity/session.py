@@ -51,7 +51,11 @@ from fastapi import Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from dotmac_workspace.session_contract import SESSION_COOKIE
+from dotmac_workspace.session_contract import (
+    CALLBACK_PATH,
+    LOGIN_STATE_COOKIE,
+    SESSION_COOKIE,
+)
 
 
 def issue(db: Session, *, tenant: Tenant, party: Party) -> tuple[AuthSession, str]:
@@ -131,6 +135,62 @@ def attach_cookie(
     )
 
 
+def attach_state_cookie(
+    response: Response, *, state: str, expires_at: datetime, secure: bool
+) -> None:
+    """Set `dmws_login_state` on `response` — the browser half of the state pair.
+
+    This cookie is what makes the callback's `state` parameter mean something.
+    Its attributes are chosen for that job and no other:
+
+    * **no `domain`** — host-only, exactly as `attach_cookie` above. A cookie a
+      sibling host could set is a cookie an attacker with a foothold on any
+      such host could plant, which would hand the attack straight back.
+    * `path=CALLBACK_PATH` — the callback is the only route that reads it, so
+      it is not sent with any other request. Narrower than the session cookie
+      because it can afford to be.
+    * `httponly` — nothing in the page has any reason to read it, and a value
+      script can read is a value an XSS can exfiltrate and replay.
+    * `samesite="lax"` — REQUIRED, not merely acceptable: the callback arrives
+      as a top-level cross-site GET redirect from the identity provider, and
+      `strict` would withhold the cookie on exactly that navigation, breaking
+      every legitimate login. `lax` sends it on top-level GETs and withholds it
+      from cross-site subrequests, which is the property this needs.
+    * `secure` under TLS, decided by the kernel's `is_secure_request`.
+    * `max_age` from the ceremony's own expiry — a state cookie outliving the
+      row it names is a value that can only ever produce a refusal.
+    """
+    max_age = max(int((expires_at - datetime.now(UTC)).total_seconds()), 0)
+    response.set_cookie(
+        key=LOGIN_STATE_COOKIE,
+        value=state,
+        max_age=max_age,
+        path=CALLBACK_PATH,
+        httponly=True,
+        samesite="lax",
+        secure=secure,
+    )
+
+
+def clear_state_cookie(response: Response, *, secure: bool) -> None:
+    """Remove `dmws_login_state`, with the SAME attributes it was set with.
+
+    Cleared on EVERY callback outcome — success, refusal, provider error —
+    because a ceremony that has been answered is over either way, and a stale
+    state cookie left in the browser is a value that outlives its row.
+
+    Same path/flag rule as `clear_cookie`: a `delete_cookie` whose `path`
+    differs leaves the original in place, and here `path` is not `/`.
+    """
+    response.delete_cookie(
+        key=LOGIN_STATE_COOKIE,
+        path=CALLBACK_PATH,
+        httponly=True,
+        samesite="lax",
+        secure=secure,
+    )
+
+
 def clear_cookie(response: Response, *, secure: bool) -> None:
     """Remove `dmws_session`, with the SAME attributes it was set with.
 
@@ -148,4 +208,11 @@ def clear_cookie(response: Response, *, secure: bool) -> None:
     )
 
 
-__all__ = ["attach_cookie", "clear_cookie", "issue", "revoke"]
+__all__ = [
+    "attach_cookie",
+    "attach_state_cookie",
+    "clear_cookie",
+    "clear_state_cookie",
+    "issue",
+    "revoke",
+]

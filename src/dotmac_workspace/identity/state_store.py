@@ -28,7 +28,7 @@ Single-use is likewise not a property a read-then-delete pair can have:
     row = SELECT … WHERE state = :s      -- two callbacks both see it
     DELETE FROM … WHERE state = :s       -- both proceed with the same verifier
 
-`consume` is therefore ONE statement:
+`take` is therefore ONE statement:
 
     DELETE FROM public.workspace_login_states
      WHERE tenant_id = :tenant_id AND state_hash = :state_hash
@@ -70,8 +70,9 @@ defined or referenced anywhere under `src/`.
 from __future__ import annotations
 
 import hashlib
+import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Final, Protocol
 from uuid import UUID, uuid4
 
@@ -103,10 +104,10 @@ _SWEEP_SQL: Final[str] = (
 _INSERT_SQL: Final[str] = (
     f"INSERT INTO {CEREMONY_TABLE} ("  # noqa: S608 - constant, see above
     " id, tenant_id, state_hash, code_verifier, nonce,"
-    " return_path, provider_binding, expires_at"
+    " redirect_uri, return_to, issued_at, provider_binding, expires_at"
     ") VALUES ("
     " :id, :tenant_id, :state_hash, :code_verifier, :nonce,"
-    " :return_path, :provider_binding, :expires_at"
+    " :redirect_uri, :return_to, :issued_at, :provider_binding, :expires_at"
     ")"
 )
 
@@ -116,24 +117,42 @@ _CONSUME_SQL: Final[str] = (
     "WHERE tenant_id = :tenant_id "
     "  AND state_hash = :state_hash "
     "  AND expires_at > now() "
-    "RETURNING code_verifier, nonce, return_path, provider_binding"
+    "RETURNING code_verifier, nonce, redirect_uri, return_to, issued_at, "
+    "provider_binding"
 )
 
 
 @dataclass(frozen=True, slots=True)
-class LoginCeremony:
-    """Everything a callback needs that must never reach the browser.
+class LoginState:
+    """One in-flight login. **Held server-side; never serialized to the wire.**
 
-    `code_verifier` proves the callback belongs to the browser that started the
-    ceremony (PKCE). `nonce` binds the ID token to it. `return_path` is where
-    the member was going, kept here rather than in the `state` parameter so it
-    cannot be rewritten into an open redirect on the way round.
+    Field-for-field the shape `dotmac_auth_oidc.state.LoginState` defines, and
+    deliberately so: this assembly is the pilot adopter of that package, and a
+    local shape that merely resembled it would have to be translated at the
+    seam — which is where a `nonce` and a `return_to` get swapped and nobody
+    notices until a login silently completes against the wrong ceremony. When
+    the package is published this class is deleted and its import takes its
+    place; nothing else in this file changes.
+
+    `code_verifier` is the reason it does not travel: possession of it plus an
+    intercepted authorization code completes the exchange, which is precisely
+    what PKCE exists to prevent.
+
+    `provider_binding` is NOT here. It is not the protocol's business — it names
+    which local registration a ceremony belongs to, so it is the store's column
+    and the store's check. See `PostgresStateStore`.
     """
 
-    code_verifier: str
+    state_id: str
     nonce: str
-    return_path: str
-    provider_binding: str
+    code_verifier: str
+    redirect_uri: str
+    issued_at: int
+    return_to: str = "/"
+
+    def expired(self, *, ttl_seconds: int, now: int | None = None) -> bool:
+        clock = int(time.time()) if now is None else now
+        return clock - self.issued_at > ttl_seconds
 
 
 def state_hash(state: str) -> str:
@@ -142,68 +161,83 @@ def state_hash(state: str) -> str:
 
 
 class StateStore(Protocol):
-    """Start and consume a login ceremony.
+    """Hold a ceremony, and take it back exactly once.
 
-    Two methods, because a ceremony has two moments. There is deliberately no
-    `get` — a reader that could look without consuming is the read-then-delete
-    pair this store exists to make unavailable.
+    `put`/`take` rather than `start`/`consume`, and with no `db` or `tenant_id`
+    parameter: this is `dotmac_auth_oidc.state.StateStore` exactly, so the
+    adapter below satisfies the package structurally with no base class and no
+    translation layer.
+
+    The request's session and tenant are held by the INSTANCE instead — see
+    `PostgresStateStore.__init__` for why that is the only shape a
+    database-backed store can honestly have.
+
+    There is deliberately no `get`: a reader that could look without consuming
+    is the read-then-delete pair this store exists to make unavailable.
     """
 
-    def start(
-        self,
-        db: Session,
-        *,
-        tenant_id: UUID,
-        state: str,
-        ceremony: LoginCeremony,
-        expires_at: datetime,
-    ) -> None:
-        """Record a ceremony. Raises on a duplicate state, which cannot happen
-        with a 256-bit random and would mean the generator is broken."""
+    def put(self, state: LoginState, *, ttl_seconds: int) -> None:
+        """Hold `state` for at most `ttl_seconds`. Raises on a duplicate state
+        id, which cannot happen with a 256-bit random and would mean the
+        generator is broken."""
         ...
 
-    def consume(
-        self, db: Session, *, tenant_id: UUID, state: str
-    ) -> LoginCeremony | None:
-        """Take the ceremony, atomically and once. `None` if there is none,
-        it belongs to another tenant, it has expired, or it was already used —
-        all four indistinguishable to the caller, on purpose."""
+    def take(self, state_id: str) -> LoginState | None:
+        """Take the ceremony, atomically and once. `None` if there is none, it
+        belongs to another tenant, it has expired, or it was already used — all
+        four indistinguishable to the caller, on purpose."""
         ...
 
 
 class PostgresStateStore:
-    """The shared, atomic store. The only one this assembly composes."""
+    """The shared, atomic store. The only one this assembly composes.
 
-    def start(
-        self,
-        db: Session,
-        *,
-        tenant_id: UUID,
-        state: str,
-        ceremony: LoginCeremony,
-        expires_at: datetime,
-    ) -> None:
+    Constructed PER REQUEST, holding that request's `Session`. That is not a
+    convenience: `dotmac_kernel.db` owns when a transaction opens and commits
+    (hard rule 8), so a store that held a long-lived session would be a second
+    transaction authority — the ceremony would commit at a different moment
+    from everything else the request did, and a rolled-back request would leave
+    a live ceremony behind. It is also why the OIDC client cannot hold this
+    store for the life of the process, and why the package accepts one per
+    ceremony operation instead.
+
+    `provider_binding` is held here rather than in `LoginState` because it is
+    this deployment's vocabulary, not the protocol's. It is written with the
+    ceremony and CHECKED on the way out: a ceremony started against one
+    registration cannot be completed against another, so a configuration change
+    mid-flight refuses rather than finishing a login against an issuer the
+    member never authenticated to.
+    """
+
+    __slots__ = ("_binding", "_db", "_tenant_id")
+
+    def __init__(self, db: Session, *, tenant_id: UUID, provider_binding: str) -> None:
+        self._db = db
+        self._tenant_id = tenant_id
+        self._binding = provider_binding
+
+    def put(self, state: LoginState, *, ttl_seconds: int) -> None:
         # Opportunistic housekeeping, scoped to this tenant and bounded by the
         # same index the consume path uses. Cheap enough to run on the way in,
         # which is what lets this table live without a scheduled sweeper.
-        db.execute(text(_SWEEP_SQL), {"tenant_id": str(tenant_id)})
-        db.execute(
+        self._db.execute(text(_SWEEP_SQL), {"tenant_id": str(self._tenant_id)})
+        self._db.execute(
             text(_INSERT_SQL),
             {
                 "id": str(uuid4()),
-                "tenant_id": str(tenant_id),
-                "state_hash": state_hash(state),
-                "code_verifier": ceremony.code_verifier,
-                "nonce": ceremony.nonce,
-                "return_path": ceremony.return_path,
-                "provider_binding": ceremony.provider_binding,
-                "expires_at": expires_at,
+                "tenant_id": str(self._tenant_id),
+                "state_hash": state_hash(state.state_id),
+                "code_verifier": state.code_verifier,
+                "nonce": state.nonce,
+                "redirect_uri": state.redirect_uri,
+                "return_to": state.return_to,
+                "issued_at": state.issued_at,
+                "provider_binding": self._binding,
+                "expires_at": datetime.now(UTC) + timedelta(seconds=ttl_seconds),
             },
         )
 
-    def consume(
-        self, db: Session, *, tenant_id: UUID, state: str
-    ) -> LoginCeremony | None:
+    def take(self, state_id: str) -> LoginState | None:
         """One statement. See the module docstring for why that is the whole
         single-use guarantee, and why a `SELECT` followed by a `DELETE` is not.
 
@@ -213,26 +247,37 @@ class PostgresStateStore:
         migration-role connection that bypasses RLS.
         """
         row = (
-            db.execute(
+            self._db.execute(
                 text(_CONSUME_SQL),
-                {"tenant_id": str(tenant_id), "state_hash": state_hash(state)},
+                {
+                    "tenant_id": str(self._tenant_id),
+                    "state_hash": state_hash(state_id),
+                },
             )
             .mappings()
             .first()
         )
         if row is None:
             return None
-        return LoginCeremony(
-            code_verifier=row["code_verifier"],
+        if row["provider_binding"] != self._binding:
+            # The ceremony IS consumed — the row is gone by the time this is
+            # read, and that is correct: a ceremony nobody can complete must
+            # not linger. What is refused is completing it against a different
+            # registration than the one the member authenticated to.
+            return None
+        return LoginState(
+            state_id=state_id,
             nonce=row["nonce"],
-            return_path=row["return_path"],
-            provider_binding=row["provider_binding"],
+            code_verifier=row["code_verifier"],
+            redirect_uri=row["redirect_uri"],
+            issued_at=row["issued_at"],
+            return_to=row["return_to"],
         )
 
 
 __all__ = [
     "CEREMONY_TABLE",
-    "LoginCeremony",
+    "LoginState",
     "PostgresStateStore",
     "StateStore",
     "state_hash",
