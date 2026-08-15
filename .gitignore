@@ -2,6 +2,11 @@ __pycache__/
 *.py[cod]
 .venv/
 .env
+# Where the deploy path writes the OIDC client secret for the container
+# to read (docker-compose.yml's `secrets:` default). A real credential
+# lands here on a deployed host, inside a checkout — so it is ignored
+# before anybody follows the runbook, not after.
+.secrets/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
