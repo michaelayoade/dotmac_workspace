@@ -29,7 +29,7 @@ Status at a glance:
 | B3 | pinned dependencies not published | **cleared** 2026-08-15 |
 | B4 | no remote, no lock, no CI evidence | **partly cleared** — remote and lock yes, results pending |
 | B5 | kernel `testing` extra declared and unused | cleared 2026-08-12 |
-| B6 | the OIDC protocol client is implemented here, not consumed | **open** — `dotmac-auth-oidc` is unpublished |
+| B6 | the OIDC protocol client is implemented here, not consumed | **cleared 2026-08-15** — `dotmac-auth-oidc 0.1.0a1` published, pinned, local copy deleted |
 
 One follow-up is OPEN and belongs to the kernel rather than to this repository:
 **session provenance** (`auth_sessions.external_identity_binding_id`). It is
@@ -232,48 +232,61 @@ Still open:
 
 ## B6 — The OIDC protocol client is implemented here, not consumed
 
-**Open, and it is a decision rather than a defect to fix quietly.**
+**Cleared 2026-08-15, by publishing the shared package and deleting the copy.**
 
-`dotmac-auth-oidc 0.1.0a1` exists. It is merged in `dotmac_starter_mt` (#168,
-`991213c`) with full CI, and it holds the same ceremony this repository now
-holds: PKCE verifier, nonce and return path server-side behind a random opaque
-state id, a mandatory atomic `StateStore`, PyJWT with the JWK retained through
-`decode`, HTTPS endpoints, and a transport that refuses redirects.
+`src/dotmac_workspace/identity/oidc.py` is gone. `dotmac-auth-oidc 0.1.0a1` is
+pinned exactly, resolved from the Forgejo index, and
+`identity/relying_party.py` — about eighty lines, most of them explaining
+lifetimes — is all that replaced it.
 
-**It is not published**, deliberately: it is absent from the starter's release
-allowlist because it "has no contract consumer and has not earned a pilot", and
-the recorded next step was *this* login slice. So the Workspace was to be its
-first consumer, and the package was waiting for the Workspace to prove it.
+### The circle, and how it broke
 
-That is a genuine circle, and this repository could not resolve it from inside:
+This blocker recorded a genuine deadlock. The package was unpublished because it
+had no pilot consumer; this repository could not be that consumer because
+`poetry add --source forgejo dotmac-auth-oidc` answered *"Could not find a
+matching version"*, and relaxing a pin or adding a cross-repository path
+dependency is forbidden (AGENTS.md §6, and B3 is the record of what that costs).
 
-- pinning it is impossible — `poetry add --dry-run --source forgejo
-  dotmac-auth-oidc` answers *"Could not find a matching version"*;
-- relaxing a pin or adding a cross-repository path dependency is forbidden
-  (AGENTS.md §6), and B3 above is the record of what that costs when it is done
-  anyway;
-- and B2 could not be closed without an OIDC client of some kind.
+It broke in the order this entry predicted, with one addition it did not:
 
-So `src/dotmac_workspace/identity/oidc.py` is a Workspace-local implementation
-of the relying-party half — discovery, PKCE S256, the token exchange, JWKS and
-ID-token verification — written to the same shape. **It is a duplicate of a
-capability the fleet already owns, and it should not survive.**
+1. **The pilot ran first, against a local wheel** — which is what the starter's
+   release lane was holding out for. Absence from its allowlist was the safety
+   mechanism, not an oversight.
+2. **The pilot changed the package.** This was the unpredicted step and the
+   valuable one. `PostgresStateStore` holds one request's `Session`, because
+   `dotmac_kernel.db` owns when that transaction commits (hard rule 8) — so the
+   package's client, which must be built once to keep its `ProviderCache`, could
+   not hold the store. Starter PR #194 added a per-ceremony `state_store`
+   argument and a `PER_REQUEST_STATE_STORE` declaration. Publishing before that
+   would have shipped a surface no honest consumer could use, and the only way
+   to find that out was to try to be one.
+3. **Then publication**, verified from the index and tagged
+   `dotmac-auth-oidc-v0.1.0a1`.
+4. **Then the deletion**, here, in the change that pinned it.
 
-The intended repair, and the order matters:
+### What this repository kept, and why
 
-1. This pilot is green, which is the condition the release lane was waiting
-   for. Publish `dotmac-auth-oidc`.
-2. A follow-up here replaces `identity/oidc.py` with the published package,
-   keeping `identity/state_store.py` (the Workspace's own atomic store, which
-   is what the package's `StateStore` contract expects a consumer to supply)
-   and everything else in `identity/` unchanged.
-3. Delete `identity/oidc.py` in the same change. Two implementations of a
-   protocol client is the state ADR-0006's extraction rule exists to prevent,
-   and the longer both exist the more likely one of them quietly diverges.
+`identity/state_store.py` stays. It is the Workspace's own atomic store — the
+thing the package's `StateStore` protocol expects a consumer to SUPPLY — and it
+now satisfies that protocol structurally, importing `LoginState` and `StateStore`
+from the package rather than restating them. A local Protocol with the same two
+methods would be a second contract free to drift.
 
-Until step 3, the honest description of this repository is that it holds a
-temporary copy of a shared capability — recorded here rather than left for a
-reader to discover from a `pyproject.toml` that does not mention the package.
+`httpx` and `pyjwt` left the runtime dependencies with the implementation. The
+assembly no longer speaks HTTP to an identity provider or verifies a signature,
+and declaring the libraries that do would claim a capability this code does not
+have. `pyjwt` reappears in the dev group, where the tests use it to mint signed
+ID tokens for a provider double so the package's REAL verification runs.
+
+### What did not change
+
+The login-CSRF defence. `tests/test_login_csrf.py` was written against the local
+implementation and passes unchanged against the published wheel — which is the
+evidence the swap preserved the property rather than inheriting a claim about
+it. Its one structural assertion was INVERTED: it used to require
+`compare_digest` in `service.complete_login` and now requires its absence, plus
+proof that the pair is still forwarded and that the pinned package still demands
+both halves.
 
 ## B5 — The kernel `testing` extra was declared and unused
 

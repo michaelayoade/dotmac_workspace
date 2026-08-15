@@ -57,19 +57,54 @@ reason — it is a column it writes and a check it makes on the way out.
 
 from __future__ import annotations
 
+import base64
 import os
+import time
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
+import jwt
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 os.environ.setdefault(
     "DATABASE_URL", "postgresql+psycopg://unused:unused@127.0.0.1:1/unused"
 )
 
 # Imported AFTER the URL above is set — see the first section of this docstring.
-from dotmac_workspace.identity.state_store import (
+from dotmac_auth_oidc import (
+    PER_REQUEST_STATE_STORE,
     LoginState,
-    state_hash,
+    OIDCClient,
+    RelyingPartyConfig,
+)
+
+from dotmac_workspace.identity.config import ProviderConfig
+from dotmac_workspace.identity.state_store import state_hash
+
+#: The identity this test suite's provider double asserts. Shared so a test
+#: cannot accidentally build a client for one issuer and a token for another.
+ISSUER = "https://idp.example.net"
+CLIENT_ID = "dotmac-workspace"
+REDIRECT_URL = "https://ws.example.net/login/callback"
+PROVIDER_BINDING = "primary"
+KID = "test-key-1"
+
+#: The assembly-side view of the same registration. Passed to the service as
+#: `config=` so no test depends on environment variables, and kept beside the
+#: provider double so the two cannot describe different providers.
+CONFIG = ProviderConfig(
+    issuer=ISSUER,
+    client_id=CLIENT_ID,
+    redirect_url=REDIRECT_URL,
+    provider_binding=PROVIDER_BINDING,
+    scopes="openid",
+    discovery_url=f"{ISSUER}/.well-known/openid-configuration",
+    http_timeout_seconds=10.0,
+    metadata_ttl_seconds=900,
+    ceremony_ttl_seconds=600,
+    clock_skew_seconds=60,
 )
 
 
@@ -113,3 +148,127 @@ class InMemoryStateStore:
 def store() -> InMemoryStateStore:
     """A fresh ceremony store per test — state must never leak between them."""
     return InMemoryStateStore()
+
+
+# ── Standing in for an identity provider ────────────────────────────────────
+#
+# The point of these doubles is what they DO NOT replace. `dotmac-auth-oidc`'s
+# discovery, JWKS handling, algorithm allow-list, PKCE check and ID-token
+# verification all run for real; only the network underneath them is fake, via
+# the package's own injectable `Transport`.
+#
+# Stubbing the verifier instead would be the defect the package's dossier
+# records about ERP's suite, where `_validate_id_token` is monkeypatched out of
+# every test and the security core has therefore never been executed. A pilot
+# that proved the wheel by not running it would prove nothing.
+
+
+@pytest.fixture(scope="session")
+def signing_key() -> Any:
+    """A throwaway RSA key. Generated per session, never written to disk, and
+    not a secret in any meaningful sense — it exists for the length of a test
+    run and signs tokens for an issuer that does not exist."""
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+class FakeIdentityProvider:
+    """A `Transport` that serves discovery and a key set, and mints ID tokens.
+
+    `nonce` is settable because a real provider learns it from the
+    authorization request. A test that has started a ceremony reads the nonce
+    back out of its store and sets it here, which is exactly the information
+    flow the real thing has — and getting it wrong is how the package's nonce
+    check fires, which is a property worth being able to exercise.
+    """
+
+    def __init__(self, key: Any, *, issuer: str, audience: str) -> None:
+        self._key = key
+        self._issuer = issuer
+        self._audience = audience
+        self.nonce = ""
+        self.subject = "sub-1"
+        self.claim_overrides: dict[str, Any] = {}
+        self.discovery_fetches = 0
+
+    @property
+    def jwks(self) -> dict[str, Any]:
+        numbers = self._key.public_key().public_numbers()
+
+        def b64(value: int) -> str:
+            raw = value.to_bytes((value.bit_length() + 7) // 8, "big")
+            return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+        return {
+            "keys": [
+                {
+                    "kty": "RSA",
+                    "kid": KID,
+                    "use": "sig",
+                    "alg": "RS256",
+                    "n": b64(numbers.n),
+                    "e": b64(numbers.e),
+                }
+            ]
+        }
+
+    def get_json(self, url: str, *, timeout: float) -> dict[str, object]:
+        if url.endswith("/.well-known/openid-configuration"):
+            self.discovery_fetches += 1
+            return {
+                "issuer": self._issuer,
+                "authorization_endpoint": f"{self._issuer}/authorize",
+                "token_endpoint": f"{self._issuer}/token",
+                "jwks_uri": f"{self._issuer}/jwks",
+            }
+        if url.endswith("/jwks"):
+            return self.jwks
+        raise AssertionError(f"unexpected GET {url}")
+
+    def post_form(
+        self, url: str, *, data: dict[str, str], auth: Any, timeout: float
+    ) -> dict[str, object]:
+        now = int(time.time())
+        claims: dict[str, Any] = {
+            "iss": self._issuer,
+            "sub": self.subject,
+            "aud": self._audience,
+            "exp": now + 300,
+            "iat": now,
+            "nonce": self.nonce,
+        }
+        claims.update(self.claim_overrides)
+        private_pem = self._key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        token = jwt.encode(claims, private_pem, algorithm="RS256", headers={"kid": KID})
+        return {"id_token": token, "token_type": "Bearer"}
+
+
+@pytest.fixture
+def idp(signing_key: Any) -> FakeIdentityProvider:
+    return FakeIdentityProvider(signing_key, issuer=ISSUER, audience=CLIENT_ID)
+
+
+@pytest.fixture
+def rp_client(idp: FakeIdentityProvider) -> OIDCClient:
+    """A REAL `OIDCClient` from the published wheel, on a fake network.
+
+    Built with `PER_REQUEST_STATE_STORE` exactly as `relying_party` builds the
+    production one, so the store-per-call seam is exercised rather than
+    bypassed.
+    """
+    return OIDCClient(
+        RelyingPartyConfig(
+            issuer=ISSUER,
+            client_id=CLIENT_ID,
+            client_secret="a-test-client-secret",
+            redirect_uri=REDIRECT_URL,
+            provider_binding=PROVIDER_BINDING,
+            scopes=("openid",),
+            discovery_url=f"{ISSUER}/.well-known/openid-configuration",
+        ),
+        state_store=PER_REQUEST_STATE_STORE,
+        transport=idp,
+    )

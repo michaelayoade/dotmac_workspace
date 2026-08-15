@@ -70,12 +70,11 @@ defined or referenced anywhere under `src/`.
 from __future__ import annotations
 
 import hashlib
-import time
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Final, Protocol
+from typing import Final
 from uuid import UUID, uuid4
 
+from dotmac_auth_oidc import LoginState
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -122,71 +121,18 @@ _CONSUME_SQL: Final[str] = (
 )
 
 
-@dataclass(frozen=True, slots=True)
-class LoginState:
-    """One in-flight login. **Held server-side; never serialized to the wire.**
-
-    Field-for-field the shape `dotmac_auth_oidc.state.LoginState` defines, and
-    deliberately so: this assembly is the pilot adopter of that package, and a
-    local shape that merely resembled it would have to be translated at the
-    seam — which is where a `nonce` and a `return_to` get swapped and nobody
-    notices until a login silently completes against the wrong ceremony. When
-    the package is published this class is deleted and its import takes its
-    place; nothing else in this file changes.
-
-    `code_verifier` is the reason it does not travel: possession of it plus an
-    intercepted authorization code completes the exchange, which is precisely
-    what PKCE exists to prevent.
-
-    `provider_binding` is NOT here. It is not the protocol's business — it names
-    which local registration a ceremony belongs to, so it is the store's column
-    and the store's check. See `PostgresStateStore`.
-    """
-
-    state_id: str
-    nonce: str
-    code_verifier: str
-    redirect_uri: str
-    issued_at: int
-    return_to: str = "/"
-
-    def expired(self, *, ttl_seconds: int, now: int | None = None) -> bool:
-        clock = int(time.time()) if now is None else now
-        return clock - self.issued_at > ttl_seconds
-
-
 def state_hash(state: str) -> str:
     """`sha256(state)`, hex — what the table actually stores."""
     return hashlib.sha256(state.encode("utf-8")).hexdigest()
 
 
-class StateStore(Protocol):
-    """Hold a ceremony, and take it back exactly once.
-
-    `put`/`take` rather than `start`/`consume`, and with no `db` or `tenant_id`
-    parameter: this is `dotmac_auth_oidc.state.StateStore` exactly, so the
-    adapter below satisfies the package structurally with no base class and no
-    translation layer.
-
-    The request's session and tenant are held by the INSTANCE instead — see
-    `PostgresStateStore.__init__` for why that is the only shape a
-    database-backed store can honestly have.
-
-    There is deliberately no `get`: a reader that could look without consuming
-    is the read-then-delete pair this store exists to make unavailable.
-    """
-
-    def put(self, state: LoginState, *, ttl_seconds: int) -> None:
-        """Hold `state` for at most `ttl_seconds`. Raises on a duplicate state
-        id, which cannot happen with a 256-bit random and would mean the
-        generator is broken."""
-        ...
-
-    def take(self, state_id: str) -> LoginState | None:
-        """Take the ceremony, atomically and once. `None` if there is none, it
-        belongs to another tenant, it has expired, or it was already used — all
-        four indistinguishable to the caller, on purpose."""
-        ...
+# `StateStore` is `dotmac_auth_oidc.state.StateStore` — imported, never
+# restated. A local Protocol with the same two methods would be a second
+# contract that drifts silently: `take` could grow a `db` parameter here and
+# the package would keep type-checking against its own version.
+#
+# `PostgresStateStore` below satisfies it STRUCTURALLY, with no base class, so
+# there is nothing to inherit and nothing to keep in sync.
 
 
 class PostgresStateStore:
@@ -277,8 +223,6 @@ class PostgresStateStore:
 
 __all__ = [
     "CEREMONY_TABLE",
-    "LoginState",
     "PostgresStateStore",
-    "StateStore",
     "state_hash",
 ]

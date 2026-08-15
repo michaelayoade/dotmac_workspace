@@ -78,24 +78,19 @@ the binding that fixes it — and never rendered.
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from secrets import compare_digest
 from uuid import UUID
 
+from dotmac_auth_oidc import OIDCError, StateStore
 from dotmac_kernel.audit import write_audit_event
 from dotmac_kernel.external_identity import finalize_external_login
 from dotmac_kernel.models import Party, Tenant
 from sqlalchemy.orm import Session
 
-from dotmac_workspace.identity import oidc, session
+from dotmac_workspace.identity import relying_party, session
 from dotmac_workspace.identity.config import ProviderConfig, provider
-from dotmac_workspace.identity.state_store import (
-    LoginState,
-    PostgresStateStore,
-    StateStore,
-)
+from dotmac_workspace.identity.state_store import PostgresStateStore
 
 logger = logging.getLogger(__name__)
 
@@ -177,30 +172,17 @@ def begin_login(
     document that will not load is an unreachable identity provider, not a
     defect in this process, and it must surface as a refusal rather than as a
     500 whose traceback names an HTTP client.
+
+    This used to fetch discovery BEFORE writing the ceremony row, so a login
+    that could never start left nothing behind. `start_login` puts the state
+    first and then reads its cache, and that is fine HERE for a reason worth
+    stating rather than assuming: the store writes through this request's
+    transaction, so an exception propagating out of the route rolls the row
+    back with everything else. The old ordering was solving a problem a
+    request-bound store does not have. A Redis-backed consumer would keep an
+    orphan until its TTL, which is harmless and is the package's to weigh.
     """
     resolved = config or provider()
-    ceremony = LoginState(
-        state_id=oidc.new_state(),
-        nonce=oidc.new_nonce(),
-        code_verifier=oidc.new_code_verifier(),
-        redirect_uri=resolved.redirect_url,
-        issued_at=int(time.time()),
-        return_to=return_path,
-    )
-    try:
-        # Discovery BEFORE the row: a ceremony written for a login that could
-        # never start is a row nobody will consume, kept alive until it
-        # expires. Ordering it this way costs nothing — the document is cached
-        # for its configured TTL.
-        metadata = oidc.metadata(resolved)
-    except oidc.OidcError as exc:
-        logger.warning(
-            "Workspace login could not be started for tenant %s: %s",
-            tenant.id,
-            exc,
-        )
-        raise LoginRefused from exc
-
     ttl = resolved.ceremony_ttl_seconds
     # `is not None`, never `store or ...`: a store is an object with a
     # `__len__`, so an EMPTY one is falsy and the truthiness form silently
@@ -212,16 +194,24 @@ def begin_login(
             db, tenant=tenant, provider_binding=resolved.provider_binding
         )
     )
-    ceremony_store.put(ceremony, ttl_seconds=ttl)
+
+    try:
+        started = relying_party.client(resolved).start_login(
+            return_to=return_path,
+            ttl_seconds=ttl,
+            state_store=ceremony_store,
+        )
+    except OIDCError as exc:
+        logger.warning(
+            "Workspace login could not be started for tenant %s: %s",
+            tenant.id,
+            exc,
+        )
+        raise LoginRefused from exc
+
     return StartedLogin(
-        url=oidc.authorization_url(
-            resolved,
-            metadata,
-            state=ceremony.state_id,
-            nonce=ceremony.nonce,
-            verifier=ceremony.code_verifier,
-        ),
-        state=ceremony.state_id,
+        url=started.url,
+        state=started.state,
         expires_at=datetime.now(UTC) + timedelta(seconds=ttl),
     )
 
@@ -253,34 +243,35 @@ def complete_login(
     the ceremony EXISTS, not that this browser started it. Only a value the
     attacker cannot write onto the victim's browser proves that.
 
-    Checked FIRST, before the ceremony is consumed, so a forged callback cannot
-    burn a ceremony that belongs to somebody else — see
-    `tests/test_login_csrf.py` for why that ordering is deliberate.
+    `dotmac_auth_oidc` is what ENFORCES it — this assembly forwards the pair
+    rather than checking it, because one implementation of a security decision
+    is the whole reason the package exists. It compares with
+    `secrets.compare_digest` BEFORE claiming the ceremony, so a forged callback
+    cannot burn a ceremony belonging to somebody else. `tests/test_login_csrf.py`
+    proves the property end to end from here, which is what makes the delegation
+    checkable rather than assumed.
 
-    The ordering below is the security property, not a style choice:
+    The ordering is the security property, not a style choice, and it now lives
+    in the package:
 
-    0. **bind to the browser.** Query state and cookie state must match.
-    1. **consume first.** The ceremony is taken atomically before anything
+    0. **bind to the browser.** Query state and cookie state must match. This
+       comes first so refusing an attacker never costs a member their login.
+    1. **claim once.** The ceremony is taken atomically before anything
        expensive happens, so a replayed callback is refused without a round
-       trip to the provider — and so a state can never be spent twice even if
-       the exchange later fails.
+       trip to the provider — and a state can never be spent twice even if the
+       exchange later fails.
     2. **verify before asking the kernel anything.** `finalize_external_login`
        cannot tell a verified subject from an invented one; it says so, and it
        is right to. Everything it is told has been checked by then.
+
+    What remains this assembly's, below, is step 3:
+
     3. **finalize and mint in ONE transaction.** The session is added while the
        binding's row lock is still held. `dotmac_kernel.db` commits at the end
        of the request, and that commit releases the lock — so the stamp and the
        session become visible together or not at all.
     """
     resolved = config or provider()
-
-    if not state or not stored_state or not compare_digest(state, stored_state):
-        logger.warning(
-            "Workspace login refused for tenant %s: the callback state does not "
-            "match the browser's ceremony cookie",
-            tenant.id,
-        )
-        raise LoginRefused
 
     ceremony_store = (
         store
@@ -289,26 +280,27 @@ def complete_login(
             db, tenant=tenant, provider_binding=resolved.provider_binding
         )
     )
-    ceremony = ceremony_store.take(state)
-    if ceremony is None:
-        logger.warning(
-            "Workspace login refused: no live ceremony for the presented state "
-            "(tenant %s). Expired, already used, or never started.",
-            tenant.id,
-        )
-        raise LoginRefused
 
     try:
-        verified = oidc.complete_ceremony(
-            resolved,
+        verified = relying_party.client(resolved).complete_login(
             code=code,
-            verifier=ceremony.code_verifier,
-            nonce=ceremony.nonce,
+            state_parameter=state,
+            stored_state=stored_state or "",
+            ttl_seconds=resolved.ceremony_ttl_seconds,
+            state_store=ceremony_store,
         )
-    except oidc.OidcError as exc:
+    except OIDCError as exc:
+        # ONE refusal for every protocol outcome, and the breadth is the point.
+        # A mismatched state pair, a replayed callback, an expired ceremony, a
+        # bad signature, a wrong nonce and an unreachable provider all arrive
+        # here as different `OIDCError` subclasses and all leave as the same
+        # `LoginRefused`. The subclass name IS the reason code and it goes to
+        # the log, where an operator can act on it; letting it reach a caller
+        # would hand whoever can drive a login an oracle.
         logger.warning(
-            "Workspace login refused at the provider exchange (tenant %s): %s",
+            "Workspace login refused for tenant %s: %s: %s",
             tenant.id,
+            type(exc).__name__,
             exc,
         )
         raise LoginRefused from exc
@@ -364,7 +356,7 @@ def complete_login(
         party=identity.party,
         token=token,
         expires_at=auth_session.expires_at,
-        return_path=ceremony.return_to,
+        return_path=verified.return_to,
         binding_id=identity.binding_id,
     )
 

@@ -30,7 +30,7 @@ from dotmac_kernel import secret_sources
 from dotmac_workspace.assembly import build_spec
 from dotmac_workspace.identity import (
     config,
-    oidc,
+    relying_party,
     secret_bootstrap,
     service,
     session,
@@ -41,7 +41,19 @@ from dotmac_workspace.identity import web as identity_web
 #: The modules an HTTP request actually reaches. `config` and
 #: `secret_bootstrap` are absent on purpose: reading the environment is exactly
 #: their job, and it happens inside the lifespan.
-REQUEST_PATH_MODULES = (identity_web, service, oidc, session, state_store)
+#
+# `relying_party` replaced `oidc` here when the protocol moved to the published
+# package. It stays in the sweep and arguably matters MORE: it is the module
+# that reads the held client secret, so it is exactly where a "just fetch it
+# when we need it" regression would land. That it reads the secret at
+# CLIENT-BUILD time rather than per request is what keeps it clean.
+REQUEST_PATH_MODULES = (
+    identity_web,
+    service,
+    relying_party,
+    session,
+    state_store,
+)
 
 #: Reading the environment on a request path is the defect ADR-0011 removed
 #: from settings resolution; `refresh_secrets` and `install_secret_source` are
@@ -180,8 +192,8 @@ def test_the_request_path_never_reads_the_environment_or_refreshes() -> None:
 
 
 def test_the_environment_guard_does_not_fire_on_prose() -> None:
-    """`oidc.py` and `service.py` discuss `WORKSPACE_OIDC_*` variables and the
-    held-not-fetched rule at length. A guard that flagged that discussion would
+    """`relying_party.py` and `service.py` discuss `WORKSPACE_OIDC_*` variables
+    and the held-not-fetched rule at length. A guard that flagged that discussion would
     be satisfied most cheaply by deleting it."""
     prose = (
         '"""This module never calls os.getenv; the environ is read at\n'

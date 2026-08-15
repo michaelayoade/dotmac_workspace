@@ -28,47 +28,37 @@ against the query parameter.
 
 `dotmac-auth-oidc` reaches the same conclusion: its `complete_login` requires
 both `state_parameter` and `stored_state` and compares them with
-`secrets.compare_digest`. This module is the Workspace-side proof of the same
-property, and it must keep passing after the local client is retired in favour
-of that package — at which point it becomes the test that the SWAP preserved
-the defence rather than inherited it.
+`secrets.compare_digest`. As of the 0.1.0a1 pin, that package is what ENFORCES
+the property here — this assembly forwards the pair rather than checking it,
+because one implementation of a security decision is the entire reason the
+package exists.
 
-No database and no network, matching `test_login_flow.py`: the `store` fixture
-is the in-memory ceremony store from `conftest.py`, and the provider exchange
-is substituted, because what is under test is which pair this assembly accepts.
+Which makes this module more valuable after the swap, not less. It was written
+against the local implementation and it still passes against the published
+wheel, unchanged in what it asserts: that is the evidence the swap PRESERVED
+the defence rather than assuming it. A delegation nobody tests end to end is a
+delegation to nowhere.
+
+No database and no live network: the ceremony store is the in-memory double and
+the provider is `FakeIdentityProvider`, which serves discovery and a key set and
+mints REAL signed ID tokens. The package's own verification runs — nothing in
+the security path is stubbed.
 """
 
 from __future__ import annotations
 
+import inspect
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
 import pytest
+from dotmac_auth_oidc import OIDCClient
+from tests.conftest import CONFIG
 
-from dotmac_workspace.identity import oidc, service
-from dotmac_workspace.identity.config import ProviderConfig
-
-CONFIG = ProviderConfig(
-    issuer="https://idp.example.net",
-    client_id="dotmac-workspace",
-    redirect_url="https://ws.example.net/login/callback",
-    provider_binding="primary",
-    scopes="openid",
-    discovery_url="https://idp.example.net/.well-known/openid-configuration",
-    http_timeout_seconds=10.0,
-    metadata_ttl_seconds=900,
-    ceremony_ttl_seconds=600,
-    clock_skew_seconds=60,
-)
-
-METADATA = oidc.ProviderMetadata(
-    issuer=CONFIG.issuer,
-    authorization_endpoint="https://idp.example.net/authorize",
-    token_endpoint="https://idp.example.net/token",
-    jwks_uri="https://idp.example.net/jwks",
-)
+from dotmac_workspace.identity import relying_party, service
+from dotmac_workspace.identity.state_store import state_hash
 
 
 def _tenant() -> Any:
@@ -76,19 +66,19 @@ def _tenant() -> Any:
 
 
 @pytest.fixture(autouse=True)
-def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Discovery and the token exchange are network calls.
+def _real_client(monkeypatch: pytest.MonkeyPatch, rp_client: Any) -> None:
+    """The service uses a REAL `OIDCClient` from the published wheel.
 
-    The exchange is stubbed to SUCCEED — deliberately. A stub that failed would
-    let a refusal mean "the provider said no", and the tests below would pass
-    against a Workspace that had no cookie check at all.
+    Patched at the module boundary rather than inside the package: what the
+    service asks for is "the client for this config", and substituting the
+    network under a genuine client keeps every protocol decision in the hands
+    of the code under test.
+
+    The provider is stubbed to SUCCEED. A provider that failed would let a
+    refusal below mean "the exchange went wrong", and every test here would
+    pass against a Workspace with no cookie check at all.
     """
-    monkeypatch.setattr(oidc, "metadata", lambda config: METADATA)
-    monkeypatch.setattr(
-        oidc,
-        "complete_ceremony",
-        lambda *a, **k: oidc.VerifiedSubject(issuer=CONFIG.issuer, subject="sub-1"),
-    )
+    monkeypatch.setattr(relying_party, "client", lambda config: rp_client)
 
 
 def test_a_callback_whose_state_does_not_match_the_cookie_is_refused(
@@ -207,12 +197,17 @@ def test_a_mismatched_callback_does_not_burn_the_ceremony(
 
 
 def test_the_matching_pair_still_completes(
-    store: Any, monkeypatch: pytest.MonkeyPatch
+    store: Any, monkeypatch: pytest.MonkeyPatch, idp: Any
 ) -> None:
-    """The negative control.
+    """The negative control, and the pilot's end-to-end evidence.
 
     Without it, a `complete_login` that refused EVERYTHING would satisfy every
     test above for entirely the wrong reason.
+
+    It is also the one test in this repository that runs the whole published
+    protocol: a real ceremony, a real PKCE challenge, a real signed ID token,
+    the wheel's own signature verification, nonce check and claim validation —
+    then this assembly's finalize-and-mint. Only the socket is fake.
     """
     tenant = _tenant()
     party = SimpleNamespace(id=uuid4())
@@ -235,6 +230,12 @@ def test_the_matching_pair_still_completes(
     started = service.begin_login(
         object(), tenant=tenant, return_path="/applications", store=store, config=CONFIG
     )
+    # What a real provider learns from the authorization request. Read back out
+    # of the store rather than passed around, so the ceremony the package wrote
+    # is the one the token is minted against — a nonce invented here would be
+    # rejected, correctly, and the test would be proving the wrong thing.
+    idp.nonce = store._rows[state_hash(started.state)][0].nonce
+
     completed = service.complete_login(
         object(),
         tenant=tenant,
@@ -249,24 +250,36 @@ def test_the_matching_pair_still_completes(
     assert completed.return_path == "/applications"
 
 
-def test_the_comparison_is_constant_time() -> None:
-    """`==` on a secret leaks its prefix through timing.
+def test_this_assembly_does_not_check_the_pair_itself() -> None:
+    """The delegation, asserted — because a SECOND check would be the defect.
 
-    The state is a 256-bit random and the attacker cannot observe the
-    comparison remotely with any precision, so this is defence in depth rather
-    than a live hole. It is asserted because the correct call is one word and
-    the incorrect one is invisible in review.
+    This test used to require `compare_digest` in `service.complete_login`. It
+    now requires its ABSENCE, and the inversion is the point of the swap: two
+    implementations of one security decision is how they drift, and the one
+    that drifts is the one nobody is reading.
+
+    What replaces it is not trust. The behavioural tests above run the real
+    package and observe the refusal, and the signature check below fails the
+    build if the pair ever stops being forwarded — a service that quietly
+    dropped `stored_state` would otherwise still type-check.
     """
-    import ast
-    import inspect
+    forwarded = inspect.getsource(service.complete_login)
+    assert "compare_digest" not in forwarded, (
+        "the assembly compares the state pair itself. That decision belongs to "
+        "dotmac_auth_oidc; a local copy is a second implementation to keep in "
+        "step, and security decisions do not survive being kept in step."
+    )
+    assert "stored_state=stored_state" in forwarded, (
+        "the cookie half is no longer forwarded to the package — the pair "
+        "check cannot fire on a value it never receives"
+    )
 
-    tree = ast.parse(inspect.getsource(service.complete_login))
-    calls = [
-        node.func.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    ]
-    assert "compare_digest" in calls, (
-        "complete_login no longer compares the state pair with "
-        "secrets.compare_digest"
+    required = inspect.signature(OIDCClient.complete_login).parameters
+    assert "stored_state" in required, (
+        "the pinned dotmac-auth-oidc no longer takes stored_state; the pair "
+        "check this assembly depends on has moved or gone"
+    )
+    assert required["stored_state"].default is inspect.Parameter.empty, (
+        "stored_state gained a default in the pinned package — an omitted "
+        "cookie would stop being a refusal and start being a skipped check"
     )

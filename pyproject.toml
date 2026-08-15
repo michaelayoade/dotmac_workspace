@@ -42,6 +42,21 @@ dotmac-kernel = { version = "0.1.0a64", source = "forgejo" }
 # naming a foreign revision. THIS assembly answers those requirements — see
 # `src/dotmac_workspace/migration_bindings.py`.
 dotmac-application-directory = { version = "0.1.0a3", source = "forgejo" }
+# The fleet's OIDC relying party (ADR-0006's stateless-protocol-adapter
+# classification). This assembly is its FIRST consumer, and the pilot that
+# earned its release: the adapter lane was held shut until a real login ran
+# against a shared, atomic StateStore rather than a per-process one.
+#
+# EXACT pin, not a caret. This package ends at a verified (issuer, subject) and
+# nothing else — no local party lookup, no session, no cookie, no provider
+# branch — so a "compatible" upgrade would still be a change to how identity is
+# PROVED here, and that is not a decision to inherit from a resolver.
+#
+# 0.1.0a1 carries the request-bound `state_store` seam this assembly needs: its
+# store holds one request's `Session`, and `dotmac_kernel.db` owns when that
+# transaction commits (hard rule 8), so the store cannot be held for the life of
+# a client. See `identity/state_store.py`.
+dotmac-auth-oidc = { version = "0.1.0a1", source = "forgejo" }
 uvicorn = { extras = ["standard"], version = "^0.30" }
 # The one Workspace database's driver. Separate from every application's
 # database by ADR-0021 §1 — there is no product DSN here and no cross-database
@@ -52,21 +67,24 @@ psycopg = { version = "^3.2", extras = ["binary"] }
 alembic = "^1.13"
 # The OIDC relying-party half. The kernel does no protocol — deliberately, and
 # it says so — so discovery, the token exchange and the JWKS fetch are this
-# assembly's, and they need an HTTP client with real timeouts. A RUNTIME
-# dependency now rather than a dev one: it moved out of the dev group in the
-# same change that made the login path depend on it.
-httpx = "^0.27"
-# ID token verification. A hand-rolled JWS verifier is the wrong place to save
-# a dependency: the failure mode of getting it subtly wrong is that every token
-# verifies. `crypto` pulls `cryptography` for the asymmetric algorithms —
-# `dotmac_workspace.identity.oidc.ALLOWED_ALGORITHMS` is asymmetric only, since
-# accepting HMAC is how a verifier is made to check a token against a value the
-# attacker already has.
-pyjwt = { version = "^2.9", extras = ["crypto"] }
+# httpx and pyjwt are NOT here any more, and their absence is the point.
+#
+# They were direct runtime dependencies because this assembly carried its own
+# OIDC implementation: its own discovery client, its own JWKS fetch, its own
+# ID-token verification. `dotmac-auth-oidc` owns that protocol now, so the
+# assembly no longer speaks HTTP to an identity provider or verifies a
+# signature, and declaring the libraries that do would claim a capability this
+# code does not have. They arrive transitively through the adapter, which is
+# where the version floors that matter live — in particular pyjwt >=2.13, a
+# SECURITY floor (GHSA-jq35-7prp-9v3f, an algorithm allow-list bypass) that the
+# adapter pins and this assembly must not undercut by declaring a looser one.
+#
+# pyjwt reappears in the dev group: the tests sign ID tokens to stand in for an
+# identity provider, which is a test concern and not a runtime one.
 
 # Dotmac packages resolve from Forgejo; everything else from PyPI. `explicit` so
-# ONLY the two names above are pulled from here — no dependency-confusion
-# aggregation of public names.
+# ONLY the three `dotmac-*` names above are pulled from here — no
+# dependency-confusion aggregation of public names.
 [[tool.poetry.source]]
 name = "forgejo"
 url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
@@ -79,6 +97,11 @@ dotmac-workspace = "dotmac_workspace.identity.cli:main"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"
+# The tests stand in for an identity provider: they mint ID tokens signed with a
+# throwaway RSA key so `dotmac-auth-oidc`'s REAL verification runs against them.
+# Stubbing the verifier instead would make the pilot prove nothing — that is
+# precisely the defect the package's own dossier records about ERP's suite.
+pyjwt = { version = "^2.13", extras = ["crypto"] }
 ruff = "^0.6"
 mypy = "^1.11"
 
