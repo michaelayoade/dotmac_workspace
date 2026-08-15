@@ -1,0 +1,27 @@
+# The disposable PostgreSQL the composed-migration and RLS canaries run against.
+# It holds no real data and never outlives a test run. The Workspace database is
+# its own (ADR-0021 §1): this file names no product database and nothing here
+# reaches one.
+services:
+  postgres:
+    image: ${TEST_DB_IMAGE:-postgres:16}
+    environment:
+      POSTGRES_USER: ${TEST_DB_ADMIN_USER:-postgres}
+      POSTGRES_PASSWORD: ${TEST_DB_ADMIN_PASSWORD:-postgres}
+      POSTGRES_DB: ${TEST_DB_NAME:-workspace_test}
+      # Kernel `0001` creates `app_user` with LOGIN and no password, so TCP auth
+      # would fail without this. Trust is acceptable here ONLY because the
+      # publish below is pinned to 127.0.0.1, the port is throwaway and the
+      # database never holds real data. Widen that binding and this becomes an
+      # unauthenticated PostgreSQL on a routable address.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      # The bind address is deliberately NOT a variable — the port is. A single
+      # `${TEST_DB_PORT}:5432` publishes on every interface while a comment
+      # claims loopback, and a docker publish bypasses the host firewall.
+      - "127.0.0.1:${TEST_DB_PORT:-5434}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TEST_DB_ADMIN_USER:-postgres}"]
+      interval: 2s
+      timeout: 2s
+      retries: 15

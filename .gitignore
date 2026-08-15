@@ -7,3 +7,6 @@ __pycache__/
 .ruff_cache/
 dist/
 *.egg-info/
+# The clean virtualenv `scripts/from_wheel_boot.sh` installs the built wheel
+# into. It must never be the repo venv, and it is never committed.
+.boot-venv/

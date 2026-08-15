@@ -50,7 +50,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
-from dotmac_workspace.launcher.guard import require_workspace_auth
+from dotmac_workspace.launcher.guard import require_applications_read
 
 router = APIRouter()
 
@@ -90,7 +90,7 @@ def _page(body: str) -> str:
 @router.get("/applications", response_class=HTMLResponse)
 def launcher(
     request: Request,
-    member: Party = Depends(require_workspace_auth),
+    member: Party = Depends(require_applications_read),
     db: Session = Depends(get_db),
 ) -> str:
     """The launcher.
@@ -99,9 +99,20 @@ def launcher(
     Workspace, and delegates to the directory module's service. It contains no
     query of its own.
 
-    Note what `member` is used for — establishing that someone is entitled to
-    see THIS tenant's portfolio — and what it is not used for: choosing which
-    tiles to show. See the module docstring.
+    Three outcomes, and the middle one is the one people get wrong:
+
+    - **no session** → 302 to `/login`. `require_workspace_auth` reads the
+      Workspace's own `dmws_session` cookie and raises `WebAuthRedirect`.
+    - **a session without `workspace.applications.read`** → **403**. Never a
+      redirect: the caller is already signed in, so sending them to a login page
+      is at best a confusing bounce and at worst a loop against a login that
+      finds a valid session and returns them here.
+    - **authorized** → the page below renders.
+
+    Note what `member` is used for — establishing that someone may see THIS
+    tenant's portfolio — and what it is NOT used for: choosing which tiles to
+    show. The permission gates the SCREEN. It says nothing about any target
+    application, and no tile is filtered by it. See the module docstring.
     """
     tenant = request.state.tenant
     bindings = launchable_bindings(db, tenant_id=tenant.id)

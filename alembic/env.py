@@ -8,6 +8,12 @@ autogenerate sees the whole composed schema.
 The three lineages' directories are composed programmatically
 (`dotmac_workspace.migrations`), not in `alembic.ini`, because two of the three
 are installed packages with environment-specific paths.
+
+Their ORDERING is composed here too, and logically. A module lineage declares
+the database effects it needs (`ModuleManifest.requires`) and never names a
+foreign revision; the ASSEMBLY binds each effect to the revision that supplies
+it. This file installs that binding set — see
+`dotmac_workspace.migration_bindings`.
 """
 
 from __future__ import annotations
@@ -28,8 +34,10 @@ from dotmac_kernel import (  # noqa: F401
 )
 from dotmac_kernel.messaging import models as messaging_models  # noqa: F401
 from dotmac_kernel.models import Base
+from dotmac_kernel.prerequisites import install_prerequisite_bindings
 from sqlalchemy import engine_from_config, pool
 
+from dotmac_workspace.migration_bindings import ASSEMBLY_PREREQUISITE_BINDINGS
 from dotmac_workspace.migrations import composed_version_locations
 
 config = context.config
@@ -38,6 +46,15 @@ config = context.config
 # programmatic Config (belt-and-braces for the online run).
 if not config.get_main_option("version_locations"):
     config.set_main_option("version_locations", composed_version_locations())
+
+# Installed BEFORE the revision map is built. A composed module lineage resolves
+# its `depends_on` from these bindings at script-load time, so an assembly that
+# composes a module without answering what that module requires fails loudly
+# here rather than ordering wrongly and discovering it against a database.
+#
+# `install_` (not `setdefault`) on purpose: this is the assembly's answer, and
+# there is exactly one per assembly.
+install_prerequisite_bindings(ASSEMBLY_PREREQUISITE_BINDINGS)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

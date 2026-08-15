@@ -8,24 +8,36 @@ is why the module ships no routers.
 `core=False`: the launcher is a deletable surface. A Workspace deployment that
 exposes only an API keeps the directory and drops this.
 
-No `permissions` declaration yet. The one authorization decision this screen
-makes — may this member see this tenant's portfolio — is `require_workspace_auth`,
-which is authentication plus tenant scope rather than a permission code. A
-finer-grained `workspace.applications.read` arrives with the screen that needs
-it to differ from "is a member", and not before: a declared code with no
-consumer is dead vocabulary that reads like a working gate (ADR-0008).
+## The one permission it declares
+
+`workspace.applications.read` — may this member see this tenant's connected
+application portfolio. The launcher OWNS that code: a permission has exactly one
+declaring module, and `create_app` refuses a composition in which two modules
+declare the same one.
+
+Declaring it here and referencing it from `guard.py` is what makes the reference
+checkable rather than decorative. `create_app` walks every mounted route, reads
+the permission code stamped on each guard, and validates it against the
+catalogue built from the installed manifests. Delete this declaration and the
+application stops booting — it does not quietly start serving the launcher to
+every member of the tenant.
+
+It is also not dead vocabulary (ADR-0008): the code has a real consumer, on the
+one route that exists, in the same commit that declares it.
 """
 
 from __future__ import annotations
 
 from dotmac_kernel.features import FeatureManifest, NavItem
 
+from dotmac_workspace.launcher.guard import APPLICATIONS_READ_PERMISSION
 from dotmac_workspace.launcher.web import router
 
 feature = FeatureManifest(
     name="launcher",
     web_routers=[router],
     nav=(NavItem(label="Applications", path="/applications"),),
+    permissions=(APPLICATIONS_READ_PERMISSION,),
     core=False,
     enabled_by_default=True,
 )
