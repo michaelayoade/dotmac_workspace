@@ -141,12 +141,13 @@ dependency is ever committed here** — this assembly lives in a different
 repository from the packages it consumes, and a path dependency would make the
 build depend on a sibling checkout.
 
-### Before those versions are published
+### Testing against an unpublished version
 
-`dotmac-kernel 0.1.0a63` **is** on the index. `dotmac-application-directory
-0.1.0a2` is **not** — no version of that package is — so `poetry lock` cannot
-resolve and there is no lock file yet (blocker B3). Until it lands, test against
-a locally built wheel rather than relaxing the pin:
+Both current pins — `dotmac-kernel 0.1.0a63` and
+`dotmac-application-directory 0.1.0a3` — are on the index, and `poetry.lock` is
+committed. The recipe below is for the NEXT time a pin runs ahead of a release:
+build the wheel and install it version-pinned, rather than relaxing the pin or
+adding a cross-repository path dependency.
 
 ```sh
 # in dotmac_starter_mt

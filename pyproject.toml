@@ -27,12 +27,12 @@ dotmac-kernel = { version = "0.1.0a63", source = "forgejo" }
 # first consumer and is not yet one: nothing here is deployed, so the module's
 # dossier correctly says zero production consumers. See docs/ADOPTION-BLOCKERS.md.
 #
-# 0.1.0a2 floors the kernel at >=0.1.0a56 (the release allocating `mod_appdir` in
+# 0.1.0a3 floors the kernel at >=0.1.0a56 (the release allocating `mod_appdir` in
 # the migration-owner ledger) and its lineage root declares
 # `requires=("tenant_scope_catalog.v1", "module_database_roles.v1")` rather than
 # naming a foreign revision. THIS assembly answers those requirements — see
 # `src/dotmac_workspace/migration_bindings.py`.
-dotmac-application-directory = { version = "0.1.0a2", source = "forgejo" }
+dotmac-application-directory = { version = "0.1.0a3", source = "forgejo" }
 uvicorn = { extras = ["standard"], version = "^0.30" }
 # The one Workspace database's driver. Separate from every application's
 # database by ADR-0021 §1 — there is no product DSN here and no cross-database

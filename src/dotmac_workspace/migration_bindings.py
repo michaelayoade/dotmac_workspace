@@ -3,7 +3,7 @@
 A module lineage declares the database EFFECTS it needs
 (`ModuleManifest.requires`, `dotmac_kernel.prerequisites`). It never names a
 foreign revision, because the answer differs per assembly:
-`dotmac-application-directory 0.1.0a2` requires `tenant_scope_catalog.v1` and
+`dotmac-application-directory 0.1.0a3` requires `tenant_scope_catalog.v1` and
 `module_database_roles.v1`, and says nothing about who provides them. This file
 is where the **Workspace** answers.
 

@@ -86,14 +86,25 @@ because it is unguarded, but because nobody can get past the guard.
 
 ## B3 — The pinned dependencies are not published
 
-**Half cleared.**
+**Cleared (2026-08-15).**
 
-- `dotmac-kernel 0.1.0a63` **is published** and resolves from the Forgejo index.
-- `dotmac-application-directory 0.1.0a2` **is not on the index.** Neither is any
-  other version of it — the package name has no releases there at all.
+- `dotmac-kernel 0.1.0a63` is published and resolves from the Forgejo index.
+- `dotmac-application-directory 0.1.0a3` is published and resolves.
 
-So `poetry lock` cannot resolve, and **there is still no lock file**. The pins in
-`pyproject.toml` are correct and deliberate; the index has not caught up.
+`poetry.lock` is generated and committed, and both pins install.
+
+The history is worth keeping, because it is why the version is a3 rather than
+a2. When this repository first pinned the directory, **no version of it existed
+on the index** — the package had never been published. The first publish attempt
+then failed in the release wheel smoke: `import dotmac_application_directory`
+required a `DATABASE_URL`, because its service imported `dotmac_kernel.db` at
+module scope and that module builds its engine on import. a2 was superseded by
+a3 rather than rebuilt under the same number, so two artifacts could never both
+claim to be a2.
+
+This repository did not work around the gap: it neither relaxed the pin nor
+added a cross-repository path dependency, both of which would have produced a
+green-looking branch built on a dependency that did not exist.
 
 Do not work around this by relaxing a pin or adding a path dependency
 (AGENTS.md §6). Build the wheel locally and install it into the venv without
