@@ -1,0 +1,84 @@
+{
+  "schema_version": 5,
+  "profile_id": "dotmac-workspace-engineering-standards",
+  "repository": {
+    "canonical_url": "https://github.com/michaelayoade/dotmac_workspace",
+    "default_branch": "main"
+  },
+  "governance_model": {
+    "kind": "pinned",
+    "canonical_url": "https://github.com/michaelayoade/dotmac_governance",
+    "revision": "fbd47b8965002943bd5799992f4b29b04e361582",
+    "source": "docs/adr/0006-cross-repository-engineering-conformance.md",
+    "status": "accepted"
+  },
+  "enforcement_mode": "required",
+  "authorities": [
+    {
+      "authority_id": "workspace-launcher-access",
+      "subject": "Establishing an authenticated Workspace member from this plane's own dmws_session cookie, and gating the launcher on the declared permission workspace.applications.read. The kernel owns the permission arithmetic (deps.authorize_party); this repository owns which cookie is read, which decision is asked for, and the shape of each refusal — redirect for unauthenticated, 403 for unauthorized.",
+      "protected_resources": [
+        "workspace-session-establishment",
+        "workspace-applications-read-decision"
+      ],
+      "owner_component": "workspace-launcher-guard",
+      "owner_implementation": "src/dotmac_workspace/launcher/guard.py",
+      "decision_interface": "dotmac_workspace.launcher.guard.require_workspace_auth",
+      "canonical_writer_paths": ["src/dotmac_workspace/launcher/guard.py"],
+      "adapter_paths": ["src/dotmac_workspace/launcher/web.py"],
+      "drift_test_paths": [
+        "tests/test_launcher_authorization.py",
+        "tests/test_launcher_is_not_authorization.py",
+        "tests/test_adoption_blockers.py"
+      ]
+    },
+    {
+      "authority_id": "workspace-migration-composition",
+      "subject": "Which separately-owned migration lineages compose into this assembly's revision graph, and which revision supplies each database effect a composed module lineage requires. A module declares effects and never names a foreign revision; the assembly answers, and the answer is proven against the live catalog rather than trusted.",
+      "protected_resources": [
+        "workspace-composed-migration-graph",
+        "workspace-prerequisite-binding"
+      ],
+      "owner_component": "workspace-migration-composition",
+      "owner_implementation": "src/dotmac_workspace/migrations.py",
+      "decision_interface": "dotmac_workspace.migrations.composed_version_locations",
+      "canonical_writer_paths": [
+        "src/dotmac_workspace/migrations.py",
+        "src/dotmac_workspace/migration_bindings.py"
+      ],
+      "adapter_paths": ["alembic/env.py"],
+      "drift_test_paths": [
+        "tests/db/test_composed_migrations.py",
+        "tests/test_assembly_is_a_third_plane.py"
+      ]
+    }
+  ],
+  "typed_contract_surfaces": [
+    {
+      "surface_id": "workspace-launcher-guard-contract",
+      "paths": [
+        "src/dotmac_workspace/launcher/guard.py",
+        "src/dotmac_workspace/launcher/web.py"
+      ],
+      "require_public_annotations": true,
+      "forbid_any": true,
+      "require_immutable_records": true
+    },
+    {
+      "surface_id": "workspace-migration-composition-contract",
+      "paths": [
+        "src/dotmac_workspace/migrations.py",
+        "src/dotmac_workspace/migration_bindings.py"
+      ],
+      "require_public_annotations": true,
+      "forbid_any": true,
+      "require_immutable_records": true
+    }
+  ],
+  "module_declared_vocabularies": [],
+  "testing_kit_boundary": {
+    "test_roots": ["tests"],
+    "kit_source_roots": [],
+    "conformance_probes": []
+  }
+}

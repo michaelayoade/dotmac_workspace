@@ -1,0 +1,35 @@
+name: Engineering standards
+
+# The pinned Dotmac Governance profile, as every other Dotmac repository carries
+# (ADR-0006, cross-repository engineering conformance). The revision in
+# `.dotmac/standards-profile.json` and the revision this action executes are the
+# SAME accepted commit — a profile that pinned one revision while the workflow
+# ran another would be a governance model in name only.
+#
+# This job cannot pass until the repository has a Git origin: the engine reads
+# the observed origin and default branch and compares them to the profile's
+# `repository` block. That is the honest remaining half of B4, and it is
+# deliberately not worked around here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  standards:
+    name: Dotmac engineering standards
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the evaluated product revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Enforce the accepted Dotmac engineering standards
+        uses: michaelayoade/dotmac_governance/.github/actions/standards-check@fbd47b8965002943bd5799992f4b29b04e361582
+        with:
+          default-branch: ${{ github.event.repository.default_branch }}

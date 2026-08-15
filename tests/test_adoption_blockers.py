@@ -5,10 +5,16 @@ unmonitored rather than exempt. `docs/ADOPTION-BLOCKERS.md` is this repository's
 statement that it is a scaffold rather than a consumer, and these tests are what
 stop that statement drifting away from the code.
 
-The important one is `test_the_guard_does_not_hand_roll_a_role_check`: the fix
-for B1 is a kernel seam, and closing it locally by querying roles here would
+The important one is `test_the_guard_does_not_hand_roll_a_role_check`, and it
+outlives the blocker it was written for. B1 has since been closed the RIGHT way
+— kernel 0.1.0a62's `permission_guard` — but the wrong way is still available to
+anyone editing this file, and closing it locally by querying roles here would
 look like progress while making this plane one that falls behind kernel security
-fixes.
+fixes. The guard stays.
+
+B2 is open, so this repository is still a scaffold and
+`dotmac-application-directory` still has zero production consumers. The file
+these tests read must keep saying so until that is untrue.
 """
 
 from __future__ import annotations
@@ -24,8 +30,9 @@ GUARD_SOURCE = Path(inspect.getfile(guard)).read_text(encoding="utf-8")
 
 
 def test_the_blockers_file_exists_and_names_the_permission_code() -> None:
-    """B1 is the blocker that needs a kernel decision. If the intended
-    permission code stops being named, nobody can act on it."""
+    """The permission code is the load-bearing name in that file. It named the
+    decision B1 could not enforce; it now names the decision the launcher DOES
+    enforce, and the file has to keep tracking which."""
     assert BLOCKERS.is_file()
     text = BLOCKERS.read_text(encoding="utf-8")
     assert "workspace.applications.read" in text
@@ -35,10 +42,31 @@ def test_the_blockers_file_exists_and_names_the_permission_code() -> None:
     )
 
 
-def test_the_guard_points_at_the_blocker() -> None:
-    """A reader of the guard must not conclude it authorizes."""
-    assert "BLOCKER B1" in GUARD_SOURCE
-    assert "ADOPTION-BLOCKERS.md" in GUARD_SOURCE
+def test_the_blockers_file_still_records_an_unreachable_surface() -> None:
+    """B2 is workstream 4's, and it is what keeps this repository a scaffold.
+
+    A blockers file that quietly stopped naming B2 while nothing minted
+    `dmws_session` would be this repository claiming to be deployable when
+    `/applications` still redirects to a route that does not exist.
+    """
+    text = BLOCKERS.read_text(encoding="utf-8")
+    assert "B2" in text
+    assert "dmws_session" in text
+
+
+def test_the_guard_still_names_the_decision_it_enforces() -> None:
+    """A reader of the guard must be able to see WHICH decision it makes.
+
+    This replaces the older `test_the_guard_points_at_the_blocker`, which
+    asserted the guard advertised B1. Keeping that assertion after B1 closed
+    would have forced the code to keep claiming a gap it no longer has — the
+    exact drift these tests exist to catch, pointing the other way.
+    """
+    assert guard.APPLICATIONS_READ == "workspace.applications.read"
+    assert "permission_guard" in GUARD_SOURCE, (
+        "the guard must authorize through the kernel's authentication-neutral "
+        "seam, which is the whole reason B1 could be closed here at all"
+    )
 
 
 def test_the_guard_does_not_hand_roll_a_role_check() -> None:

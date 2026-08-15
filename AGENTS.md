@@ -41,11 +41,35 @@ declines every control the kernel performs inside `create_app` — academy shipp
 a tenant lockdown that was configured, asserted in config validation, and never
 armed. Reading a kernel setting is not adopting the behaviour behind it.
 
-## 4. Never re-implement token validation
+## 4. Never re-implement token validation, and never re-implement authorization
 
-`dotmac_kernel.deps.authenticate_request` is the one seam. The Workspace guard
-calls it. An auth-tightening fix (expiry, tenant claims, revocation) must land
-there once and reach here for free.
+`dotmac_kernel.deps.authenticate_request` is the one seam for *who are you?*.
+The Workspace guard calls it. An auth-tightening fix (expiry, tenant claims,
+revocation) must land there once and reach here for free.
+
+`dotmac_kernel.deps.permission_guard`, over `deps.authorize_party`, is the one
+seam for *may you?*. The launcher declares `workspace.applications.read` on its
+manifest and guards `GET /applications` with it. Do **not** query
+`PartyRoleGrant`/`Role` here to reach the same answer — enforced by
+`tests/test_adoption_blockers.py::test_the_guard_does_not_hand_roll_a_role_check`.
+
+The two refusals are deliberately different and must stay different:
+unauthenticated is a **302 to `/login`**; authenticated-but-unauthorized is a
+**403**. A redirect on an authorization failure tells a signed-in user to sign
+in and loops against a login that finds a valid session.
+
+## 4a. A module declares database effects; this assembly binds the revision
+
+A composed module lineage names the EFFECTS it needs
+(`ModuleManifest.requires`) and never a foreign revision, because the answer
+differs per assembly. This assembly answers in
+`src/dotmac_workspace/migration_bindings.py`, installed by `alembic/env.py`
+before the revision map is built and exported to Alembic's graph commands
+through `DOTMAC_MIGRATION_BINDINGS`.
+
+Never edit a module's migration to name one of our revisions, and never treat a
+binding as fact: `require_prerequisites` proves each effect against the live
+catalog before any DDL runs, and `make test-db` asserts the applied result.
 
 ## 5. Adapters are thin
 
@@ -59,6 +83,11 @@ Forgejo index (ADR-0005). **Never commit a path or editable dependency** — thi
 repository does not live beside the packages it consumes. To test unreleased
 versions, build wheels and `pip install` them into the venv without touching
 `pyproject.toml`; see the README.
+
+An unpublished pin is a **finding to report**, never a reason to relax the pin.
+The `from-wheel` CI job exists partly to make that failure loud: it installs the
+built wheel into a clean virtualenv and resolves its pins from the index, so a
+version that is only written down fails there rather than in production.
 
 ## 7. Everything by config
 
@@ -84,9 +113,21 @@ image name or path.
 ## Validation before any commit
 
 ```sh
-make check   # ruff lint + format check + mypy
-make test    # pytest
+make check         # ruff lint + format check + mypy
+make test          # static and unit tests, no database
+make test-db-up    # disposable Postgres + all three lineages applied
+make test-db       # composed-migration and tenant-isolation canaries
+make test-db-down
 ```
 
 Tests run on Git-hosted CI. Static checks may run locally; local runs are not
-test evidence.
+test evidence. `tests/db` must never skip itself when its database is absent —
+a canary that skips proves nothing while the job goes green.
+
+## 9. The Governance profile is pinned, and the workflow runs the same revision
+
+`.dotmac/standards-profile.json` pins the accepted `dotmac_governance` revision
+and `.github/workflows/engineering-standards.yml` executes that same commit. A
+profile pinning one revision while the workflow runs another is a governance
+model in name only. The check reads the repository's observed Git origin, so it
+cannot pass until this repository has a remote.
