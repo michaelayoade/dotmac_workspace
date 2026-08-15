@@ -15,21 +15,59 @@
   "enforcement_mode": "required",
   "authorities": [
     {
-      "authority_id": "workspace-launcher-access",
-      "subject": "Establishing an authenticated Workspace member from this plane's own dmws_session cookie, and gating the launcher on the declared permission workspace.applications.read. The kernel owns the permission arithmetic (deps.authorize_party); this repository owns which cookie is read, which decision is asked for, and the shape of each refusal — redirect for unauthenticated, 403 for unauthorized.",
+      "authority_id": "workspace-session-authentication",
+      "subject": "Establishing an authenticated Workspace member from this plane's own dmws_session cookie, and gating the launcher on the declared permission workspace.applications.read. Renamed from workspace-launcher-access when the identity feature arrived: 'who are you?' is one question for the whole plane, so it moved to the assembly level (web_auth.py) where every surface reaches the same seam and no feature has to import another to authenticate. What stayed with the launcher is what is the launcher's - the permission it declares and the guard stamped with it. The kernel owns the permission arithmetic (deps.authorize_party) and token validation (deps.authenticate_request); this repository owns which cookie is read, which decision is asked for, and the shape of each refusal - a redirect for unauthenticated, a 403 for unauthorized.",
       "protected_resources": [
         "workspace-session-establishment",
         "workspace-applications-read-decision"
       ],
-      "owner_component": "workspace-launcher-guard",
-      "owner_implementation": "src/dotmac_workspace/launcher/guard.py",
-      "decision_interface": "dotmac_workspace.launcher.guard.require_workspace_auth",
-      "canonical_writer_paths": ["src/dotmac_workspace/launcher/guard.py"],
+      "owner_component": "workspace-web-auth",
+      "owner_implementation": "src/dotmac_workspace/web_auth.py",
+      "decision_interface": "dotmac_workspace.web_auth.require_workspace_auth",
+      "canonical_writer_paths": [
+        "src/dotmac_workspace/web_auth.py",
+        "src/dotmac_workspace/session_contract.py",
+        "src/dotmac_workspace/launcher/guard.py"
+      ],
       "adapter_paths": ["src/dotmac_workspace/launcher/web.py"],
       "drift_test_paths": [
         "tests/test_launcher_authorization.py",
         "tests/test_launcher_is_not_authorization.py",
         "tests/test_adoption_blockers.py"
+      ]
+    },
+    {
+      "authority_id": "workspace-federated-login",
+      "subject": "Deciding that an externally authenticated subject is a local member of this tenant, and issuing the dmws_session that follows from it. One entry point: complete_login consumes the ceremony atomically, verifies the ID token, and calls the kernel's finalize_external_login - never resolve_external_identity, which takes no lock and would leave a window in which an administrator disables a binding and a session derived from the revoked identity is minted behind the commit. The session is added in the same transaction that still holds the binding's row lock, and dotmac_kernel.db owns the commit that releases it. Ceremony state is shared and atomic (one DELETE ... RETURNING), the state parameter is opaque, PKCE is S256, and the OIDC client secret is held from startup rather than dereferenced per request (ADR-0009). Binding is an explicit administrative act: no JIT provisioning and no email linking.",
+      "protected_resources": [
+        "workspace-external-login-decision",
+        "workspace-login-ceremony-state",
+        "workspace-oidc-secret-material"
+      ],
+      "owner_component": "workspace-identity-service",
+      "owner_implementation": "src/dotmac_workspace/identity/service.py",
+      "decision_interface": "dotmac_workspace.identity.service.complete_login",
+      "canonical_writer_paths": [
+        "src/dotmac_workspace/identity/service.py",
+        "src/dotmac_workspace/identity/session.py",
+        "src/dotmac_workspace/identity/state_store.py",
+        "src/dotmac_workspace/identity/relying_party.py",
+        "src/dotmac_workspace/identity/config.py",
+        "src/dotmac_workspace/identity/secret_bootstrap.py",
+        "src/dotmac_workspace/identity/bootstrap.py"
+      ],
+      "adapter_paths": [
+        "src/dotmac_workspace/identity/web.py",
+        "src/dotmac_workspace/identity/cli.py"
+      ],
+      "drift_test_paths": [
+        "tests/test_login_flow.py",
+        "tests/test_login_surface.py",
+        "tests/test_no_resolve_then_issue.py",
+        "tests/test_state_store_is_shared.py",
+        "tests/test_secret_is_held.py",
+        "tests/db/test_state_store_atomicity.py",
+        "tests/db/test_login_state_isolation.py"
       ]
     },
     {
@@ -57,8 +95,28 @@
     {
       "surface_id": "workspace-launcher-guard-contract",
       "paths": [
+        "src/dotmac_workspace/web_auth.py",
+        "src/dotmac_workspace/session_contract.py",
         "src/dotmac_workspace/launcher/guard.py",
         "src/dotmac_workspace/launcher/web.py"
+      ],
+      "require_public_annotations": true,
+      "forbid_any": true,
+      "require_immutable_records": true
+    },
+    {
+      "surface_id": "workspace-federated-login-contract",
+      "paths": [
+        "src/dotmac_workspace/identity/service.py",
+        "src/dotmac_workspace/identity/session.py",
+        "src/dotmac_workspace/identity/state_store.py",
+        "src/dotmac_workspace/identity/relying_party.py",
+        "src/dotmac_workspace/identity/config.py",
+        "src/dotmac_workspace/identity/secret_bootstrap.py",
+        "src/dotmac_workspace/identity/bootstrap.py",
+        "src/dotmac_workspace/identity/web.py",
+        "src/dotmac_workspace/identity/cli.py",
+        "src/dotmac_workspace/page.py"
       ],
       "require_public_annotations": true,
       "forbid_any": true,

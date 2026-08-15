@@ -27,7 +27,13 @@ Enforced by `tests/test_launcher_is_not_authorization.py`.
 
 - The session cookie is `dmws_session`. Never `access_token` — that is what
   every product portal reads, and a shared name under one parent domain would
-  make the isolation a deployment coincidence rather than a property.
+  make the isolation a deployment coincidence rather than a property. Its name
+  lives once, in `dotmac_workspace.session_contract`.
+- **The cookie carries no `Domain` attribute, ever.** Host-only is the line that
+  makes the isolation a property of the code rather than of how it happens to be
+  deployed; a `Domain=`-scoped cookie under a shared parent would be sent to
+  every product portal underneath it. Enforced by
+  `tests/test_login_surface.py::test_the_session_cookie_carries_no_domain_attribute`.
 - The Workspace database is its own. No product DSN appears in this repository
   and nothing here connects to one.
 - Cross-application integration is **API or webhook only**. Importing a product
@@ -57,6 +63,48 @@ The two refusals are deliberately different and must stay different:
 unauthenticated is a **302 to `/login`**; authenticated-but-unauthorized is a
 **403**. A redirect on an authorization failure tells a signed-in user to sign
 in and loops against a login that finds a valid session.
+
+## 4b. The login path: one entry point, one ceremony, one held secret
+
+Federated login is `src/dotmac_workspace/identity/`. Five rules, each with the
+failure it prevents and the test that keeps it:
+
+1. **`finalize_external_login`, never `resolve_external_identity`.** The read
+   is legitimate for an admin screen and never on a path that ends in a
+   session: resolving and then issuing leaves a window in which an
+   administrator disables a binding, the disable commits, and a session derived
+   from the revoked identity is minted behind it — with both audit trails
+   looking correct, because the ordering that makes them incompatible is what
+   neither records. The finalizer holds the binding's row lock across the
+   decision AND the session. There must be **no resolve-then-issue path
+   anywhere**; `tests/test_no_resolve_then_issue.py` AST-forbids one across all
+   of `src/`, and also forbids a `commit()` inside `complete_login`, because the
+   commit is what releases the lock and it belongs to `dotmac_kernel.db`.
+2. **Ceremony state is shared and atomic.** PostgreSQL, consumed by ONE
+   `DELETE … RETURNING`. Never a `SELECT` then a `DELETE` — two callbacks would
+   both see the row and both proceed with one PKCE verifier. **No per-process
+   store may exist in `src/` at all**, not even one guarded against selection:
+   the test double lives in `tests/conftest.py`, outside the wheel.
+   `tests/test_state_store_is_shared.py` and
+   `tests/db/test_state_store_atomicity.py`.
+3. **The `state` parameter is an opaque id.** PKCE `S256` (never `plain`) and a
+   nonce; the verifier, the nonce and the return path never travel. A return
+   path that made the round trip is an open redirect waiting for someone to
+   rewrite it.
+4. **The OIDC client secret is HELD, never dereferenced** (ADR-0009). Installed
+   once by a startup hook, inside the lifespan. Nothing on a request path reads
+   the environment, refreshes a source, or contacts a store —
+   `tests/test_secret_is_held.py` proves the load count is one and sweeps the
+   request-path modules by AST.
+5. **Explicit binding only.** No JIT provisioning, no email linking, no reading
+   of provider roles/groups/scopes. An unbound subject is refused, and every
+   refusal is the same refusal — a caller that could tell "no such subject" from
+   "disabled binding" is a subject-enumeration oracle.
+
+Session **provenance** (`auth_sessions.external_identity_binding_id`) belongs to
+the KERNEL. Do not add a Workspace-owned equivalent: it would make this plane a
+second writer of session revocation in a different transaction from the kernel's
+disable. Record `binding_id` in the audit event and report the kernel change.
 
 ## 4a. A module declares database effects; this assembly binds the revision
 
@@ -97,8 +145,18 @@ image name or path.
 
 ## 8. What must not be built here
 
-- No proprietary identity provider — federated login is external OIDC.
-- No global party/person database.
+- No proprietary identity provider — federated login is external OIDC. No
+  password login, no credential store, no `UserCredential` written here.
+- **No multi-provider registration table.** One deployment-configured provider,
+  named by environment. A table of providers an administrator creates is a
+  separate contract with its own lifecycle — who may add one, where its secret
+  half lives under ADR-0009, what happens to the bindings naming a deleted row,
+  and how a tenant-created provider interacts with `provider_binding` being the
+  TRUSTED half of the kernel's resolution tuple. Decide it from real demand or
+  not at all; a wire format invented from imagination is one somebody has to
+  unpick in the field.
+- No global party/person database. The bootstrap CLI creates members in ONE
+  tenant, through the kernel's tenant-scoped session, and nowhere else.
 - No shared session or cookie service.
 - No generic data-federation module.
 - No second audit, messaging, inbox, idempotency, permissions or entitlement
@@ -116,13 +174,34 @@ image name or path.
 make check         # ruff lint + format check + mypy
 make test          # static and unit tests, no database
 make test-db-up    # disposable Postgres + all three lineages applied
-make test-db       # composed-migration and tenant-isolation canaries
+make test-db       # composed-migration, tenant-isolation and login canaries
 make test-db-down
 ```
 
 Tests run on Git-hosted CI. Static checks may run locally; local runs are not
 test evidence. `tests/db` must never skip itself when its database is absent —
 a canary that skips proves nothing while the job goes green.
+
+### Writing a concurrency canary
+
+Copy the shape in `tests/db/test_state_store_atomicity.py`; do not invent one.
+Two THREADS with their own connections, a `threading.Barrier` after both
+advisory reads, and EVERY wait bounded — `SET LOCAL lock_timeout`, `SET LOCAL
+statement_timeout`, `Barrier.wait(timeout=)`, `Future.result(timeout=)`. Workers
+RETURN outcomes and the test asserts on the collected results, because an
+assertion raised inside a thread fails that thread and not the test. Probe the
+PROPERTY (exactly one consumed), never a proxy that depends on who won. And note
+that `set_config('app.current_tenant', …, true)` is TRANSACTION-local: a
+`commit()` discards it, so fixtures seed in their own short-lived sessions.
+
+### Writing an architecture guard
+
+Match an AST node or a syntax-specific call site — never grep for a concept in
+source text. Three guards in this programme have flagged the comment explaining
+the very invariant they enforce, and the cheapest way to satisfy such a guard is
+to delete the explanation. Every guard here is paired with **two** tests: one
+proving it does not fire on prose describing the absence, and one proving it
+does fire on the real thing. A detector that can never fail is not evidence.
 
 ## 9. The Governance profile is pinned, and the workflow runs the same revision
 

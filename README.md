@@ -81,6 +81,109 @@ application.
 `tests/test_launcher_is_not_authorization.py` and
 `tests/test_launcher_authorization.py` enforce all of it.
 
+## Signing in
+
+The Workspace has its own front door. Not a proprietary identity provider —
+AGENTS.md §8 forbids one — but a relying party for **one deployment-configured
+external OIDC provider**, with its own cookie and its own session.
+
+```
+GET  /login            the front door
+POST /login            starts a ceremony, sends the browser to the provider
+GET  /login/callback   completes it, or refuses
+POST /logout           revokes the session (a POST, under the CSRF header bridge)
+```
+
+Six properties, and each of them is somewhere you can check:
+
+1. **Its own cookie, its own session.** `dmws_session`, host-only — no `Domain`
+   attribute, ever — `HttpOnly`, `SameSite=Lax`. The row is a kernel
+   `AuthSession`, so `dotmac_kernel.deps.authenticate_request` remains the ONE
+   validation seam and a kernel auth fix reaches this plane for free.
+2. **The callback uses `finalize_external_login`, never
+   `resolve_external_identity`.** Kernel `0.1.0a64` added the former because
+   the latter, followed by issuing a session, leaves a window: an administrator
+   disables a binding, the disable commits, and a session derived from the
+   identity it revoked is minted behind it. Both audit trails look correct;
+   only the ordering makes them incompatible. The finalizer holds the binding's
+   row lock across the decision AND the session, so a login and a concurrent
+   disable serialize — one of them blocks and then refuses.
+3. **Ceremony state is shared and atomic.** `public.workspace_login_states`,
+   consumed by one `DELETE … RETURNING`, so a login started on one worker
+   completes on another and a state works exactly once. There is no in-memory
+   store in the package at all: the test double lives in `tests/conftest.py`,
+   outside the wheel, where nothing can select it.
+4. **The `state` parameter is opaque.** A 256-bit random id. The PKCE verifier
+   (S256), the nonce and the return path stay server-side and never travel.
+5. **The OIDC client secret is HELD, never dereferenced** (ADR-0009). A startup
+   hook installs a `SecretSource` once, inside the lifespan; afterwards reading
+   it is a dictionary lookup. Nothing on a request path reads the environment
+   or contacts a store.
+6. **Binding is explicit.** No JIT provisioning and no email linking. An
+   unbound subject is refused — the refusal is logged with the subject, which
+   is how an operator learns what to bind.
+
+Configuration, all knobs with documented defaults
+(`src/dotmac_workspace/identity/config.py`):
+
+```sh
+WORKSPACE_OIDC_ISSUER=https://idp.example.net/realms/dotmac
+WORKSPACE_OIDC_CLIENT_ID=dotmac-workspace
+WORKSPACE_OIDC_REDIRECT_URL=https://ws.example.net/login/callback
+WORKSPACE_OIDC_CLIENT_SECRET_FILE=/run/secrets/oidc-client-secret   # or _SECRET
+```
+
+A deployment that keeps the secret elsewhere writes its own `SecretSource` and
+installs it; the store client stays out of this repository, exactly as the
+kernel keeps it out of itself.
+
+**One provider, and no registration table.** A multi-provider table is out of
+scope and is a separate contract to be decided from real demand — it brings its
+own lifecycle (who may add one, where its secret half lives under ADR-0009,
+what happens to bindings that name a deleted row) and deciding that from
+imagination produces a wire format somebody has to unpick in the field.
+
+**The protocol client here is temporary.** `dotmac-auth-oidc 0.1.0a1` already
+holds this ceremony and is merged in the starter — but it is deliberately
+unpublished, waiting for a pilot, and this login slice was to be that pilot. A
+pin cannot resolve, and relaxing one or adding a path dependency is forbidden
+(AGENTS.md §6), so `identity/oidc.py` is a Workspace-local implementation of a
+capability the fleet already owns. It should be replaced by the published
+package and deleted — see `docs/ADOPTION-BLOCKERS.md` § B6.
+
+### Bootstrapping the first member
+
+Federated login refuses an unbound subject, and this assembly composes no
+parties or RBAC surface — so the first member is created by the operator CLI:
+
+```sh
+dotmac-workspace member add --tenant acme \
+    --email ada@acme.example --first-name Ada --last-name Lovelace
+dotmac-workspace bind --tenant acme --email ada@acme.example \
+    --subject <the provider's sub> --by michael@dotmac --reason "ticket 4417"
+dotmac-workspace bindings --tenant acme
+```
+
+The subject is opaque; the way to find it is to have the person attempt a
+sign-in first, which logs `issuer … subject … is not bound`. That ordering is
+deliberate — the binding is then made against a subject the provider actually
+asserted, not one typed from a directory export.
+
+### What disabling a binding does, and does not
+
+`dotmac-workspace disable` deactivates a binding and keeps the row with its
+evidence. **No further session can be derived from it** — the disable takes the
+same row lock the login holds, so a login in flight either already committed or
+blocks and then refuses. **A session already issued from it stays valid until it
+expires.**
+
+Closing that last gap needs session provenance —
+`auth_sessions.external_identity_binding_id` — and `auth_sessions` is a KERNEL
+table. It is reported as a kernel follow-up rather than implemented here; a
+Workspace-owned shadow table would have made this plane a second writer of
+session revocation, in a different transaction from the kernel's disable. See
+`docs/ADOPTION-BLOCKERS.md` § B2.
+
 ## What this wave ships, and what it does not
 
 **Ships:** the app launcher over `dotmac-application-directory` — the tenant's
@@ -108,8 +211,10 @@ Deferring a module is cheap. Unpicking a wire format in the field is not.
 ```python
 ProductAssemblySpec(
     name="dotmac_workspace",
-    modules=(launcher_feature, dotmac_application_directory.module),
+    modules=(identity_feature, launcher_feature, dotmac_application_directory.module),
     web_enabled=True,
+    startup_checks=(configuration_errors,),   # fatal in production, a warning in dev
+    startup_hooks=(install_workspace_secrets,),  # the OIDC secret, held from boot
 )
 ```
 
@@ -143,7 +248,7 @@ build depend on a sibling checkout.
 
 ### Testing against an unpublished version
 
-Both current pins — `dotmac-kernel 0.1.0a63` and
+Both current pins — `dotmac-kernel 0.1.0a64` and
 `dotmac-application-directory 0.1.0a3` — are on the index, and `poetry.lock` is
 committed. The recipe below is for the NEXT time a pin runs ahead of a release:
 build the wheel and install it version-pinned, rather than relaxing the pin or
@@ -161,21 +266,29 @@ poetry run pytest --ignore=tests/db
 
 `make check` and `make test` work normally once both are on the index.
 
-## Status: local scaffold, not a consumer
+## Status: reachable, not yet deployed
 
-**Nothing here is deployed, and this repository is not yet a consumer of
+**Nothing here runs anywhere, so this repository is still not a consumer of
 `dotmac-application-directory`** — the module's dossier correctly records zero
-production consumers. `docs/ADOPTION-BLOCKERS.md` is the live list.
+production consumers. `docs/ADOPTION-BLOCKERS.md` is the live list, and the
+distinction it now turns on is worth being precise about: *"the launcher can be
+reached"* and *"the Workspace is in production"* are different claims, and only
+the first became true on 2026-08-15.
 
 **B1 is cleared**: `dotmac-kernel 0.1.0a62` added the authentication-neutral
 permission seam, so the launcher declares and enforces
 `workspace.applications.read` instead of authenticating without authorizing.
 
-**B2 is not.** No route here mints the `dmws_session` cookie and `/login` does
-not exist, so `/applications` remains unreachable end to end — it redirects, and
-the redirect target 404s. **B3** is half cleared: the kernel is published, the
-directory module is not, so there is still no lock file. **B4**'s CI jobs are
-written and have never run; there is no Git remote.
+**B2 is cleared**: `/login`, its callback and `dmws_session` exist (see "Signing
+in" above), so `/applications` is reachable end to end for the first time. One
+follow-up is open and belongs to the KERNEL rather than here — session
+provenance on `auth_sessions`, which is what would let disabling a binding
+revoke exactly the sessions it produced.
+
+**B3 is cleared**: both pins are published and `poetry.lock` is committed.
+**B4** is partly cleared — the remote exists, `main` is protected, and the jobs
+are wired; what is still missing is the only thing that ever mattered, a green
+RESULT rather than a written job.
 
 ## Commands
 

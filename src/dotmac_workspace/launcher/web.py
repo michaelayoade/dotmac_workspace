@@ -51,6 +51,8 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from dotmac_workspace.launcher.guard import require_applications_read
+from dotmac_workspace.page import render_page
+from dotmac_workspace.session_contract import LOGOUT_PATH
 
 router = APIRouter()
 
@@ -78,12 +80,22 @@ def _tile(*, name: str, instance: str, url: str, stale: bool) -> str:
 
 
 def _page(body: str) -> str:
-    return (
-        "<!doctype html>"
-        '<html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        "<title>Applications — DotMac Workspace</title></head>"
-        f"<body><main><h1>Your applications</h1>{body}</main></body></html>"
+    """The launcher screen, in the assembly's one HTML shell.
+
+    The shell is shared with the login screen so the CSRF header bridge can
+    never be present on one page and missing on the other — see
+    `dotmac_workspace.page`. Signing out is `hx-post`, never a link: a
+    CSRF-exempt safe method that a third-party page can trigger by loading an
+    image is a forced logout.
+    """
+    return render_page(
+        title="Applications",
+        body=(
+            "<h1>Your applications</h1>"
+            f"{body}"
+            f'<button type="button" hx-post="{LOGOUT_PATH}" '
+            'hx-swap="none">Sign out</button>'
+        ),
     )
 
 

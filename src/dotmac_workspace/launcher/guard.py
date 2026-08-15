@@ -1,26 +1,18 @@
-"""The Workspace's own web-auth guard — its own cookie, its own redirect.
-
-ADR-0021 §1 requires the Workspace to share **no database, session, cookie or
-guard** with any application. This module is the "no cookie, no guard" half.
-
-## Why not `dotmac_kernel.web_deps.require_web_auth`
-
-That guard reads a cookie literally named `access_token`, which is also what
-every product data plane's portal reads. On separate hosts a browser scopes
-those separately, so today they cannot collide — but "cannot collide because of
-how we happen to deploy it" is not the invariant ADR-0021 states. A Workspace
-and a target application served under one parent domain, with a `Domain=`-scoped
-cookie, would share a session name, and the containment invariant would then
-depend on a deployment detail rather than on the code.
-
-So the Workspace names its cookie `dmws_session` and carries its own guard.
+"""The launcher's authorization decision — "may you?", and nothing else.
 
 ## Two questions, two seams, two answers
 
-`require_workspace_auth` answers **"who are you?"** and nothing else. It
-establishes an authenticated person in this tenant and checks no role and no
-permission. Its refusal is a redirect to `/login`, because a visitor with no
-session can act on that.
+`dotmac_workspace.web_auth.require_workspace_auth` answers **"who are you?"**.
+It reads the Workspace's own `dmws_session` cookie, delegates validation to
+`dotmac_kernel.deps.authenticate_request`, and refuses with a redirect to
+`/login` — because a visitor with no session can act on that. It lives at the
+ASSEMBLY level, not here, because every surface asks it and no feature should
+have to import another feature to authenticate. See that module for why the
+cookie is not `access_token`, and `dotmac_workspace.session_contract` for where
+the name itself lives.
+
+It moved there when the identity feature arrived. What stayed here is what is
+the launcher's: the permission it declares, and the guard stamped with it.
 
 `require_applications_read` answers **"may you?"**, over the top of it. The
 decision is the declared permission `workspace.applications.read`, owned by the
@@ -35,39 +27,21 @@ caller IS signed in. Redirecting them to a login page tells a signed-in user to
 sign in, which best case is a confusing bounce and worst case is a loop, because
 the login sees a valid session and sends them straight back.
 
-Hand-rolling the role query here would still be the wrong fix, and remains
-forbidden (`tests/test_adoption_blockers.py` AST-forbids `PartyRoleGrant`,
-`Role`, `select` and `execute` in this file). Duplicating kernel authorization
-logic in an assembly is how a plane falls behind a kernel security fix — the
-failure ADR-0015 recorded against academy. The seam exists precisely so that
-this assembly does not have to.
-
-## What is deliberately NOT re-implemented
-
-Token, session and party validation. That is
-`dotmac_kernel.deps.authenticate_request` — the ONE seam both the bearer and
-cookie flows go through — and this guard calls it rather than re-deriving it.
-Any auth-tightening fix (expiry, tenant-claim checks, revocation) lands there
-once and this guard receives it. Re-implementing validation here is how a plane
-quietly falls behind a security fix, which is exactly the failure ADR-0015
-recorded against a hand-built assembly.
+Hand-rolling the role query would still be the wrong fix, and remains forbidden
+in this file AND in `web_auth.py` — `tests/test_adoption_blockers.py` AST-forbids
+`PartyRoleGrant`, `Role`, `select`, `execute`, `scalars` and `query` in both.
+Duplicating kernel authorization logic in an assembly is how a plane falls
+behind a kernel security fix: the failure ADR-0015 recorded against academy. The
+seam exists precisely so that this assembly does not have to.
 """
 
 from __future__ import annotations
 
-from dotmac_kernel.deps import authenticate_request, get_db, permission_guard
-from dotmac_kernel.models import Party
+from dotmac_kernel.deps import permission_guard
 from dotmac_kernel.permissions import PermissionSpec
-from dotmac_kernel.web_deps import WebAuthRedirect
-from fastapi import Depends, Request
-from sqlalchemy.orm import Session
 
-#: The Workspace's session cookie. Deliberately NOT `access_token` — see the
-#: module docstring. A test asserts the two never converge.
-SESSION_COOKIE = "dmws_session"
-
-#: Where an unauthenticated visitor is sent.
-LOGIN_PATH = "/login"
+from dotmac_workspace.session_contract import LOGIN_PATH, SESSION_COOKIE
+from dotmac_workspace.web_auth import require_workspace_auth
 
 #: The one authorization decision this wave's surface makes: may this member see
 #: this tenant's connected-application portfolio. Named here rather than in
@@ -75,24 +49,6 @@ LOGIN_PATH = "/login"
 #: same constant — a code that exists in two string literals is a code that will
 #: eventually exist in two spellings.
 APPLICATIONS_READ = "workspace.applications.read"
-
-
-def require_workspace_auth(request: Request, db: Session = Depends(get_db)) -> Party:
-    """The authenticated Workspace member, or a redirect to the login page.
-
-    Fails closed on every path: no cookie, an invalid or expired token, a tenant
-    mismatch, or a non-person party all produce the same redirect. The guard
-    never explains which — an error that distinguishes "no such session" from
-    "wrong tenant" tells an unauthenticated caller something about the tenant.
-    """
-    token = request.cookies.get(SESSION_COOKIE)
-    if not token:
-        raise WebAuthRedirect(request.url.path, login_path=LOGIN_PATH)
-
-    party = authenticate_request(request, db, token=token)
-    if party is None:
-        raise WebAuthRedirect(request.url.path, login_path=LOGIN_PATH)
-    return party
 
 
 #: The launcher's permission declaration, referenced by the feature manifest.

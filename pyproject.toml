@@ -21,7 +21,16 @@ python = ">=3.12,<3.14"
 # assembly authorize a COOKIE-authenticated caller against a declared permission
 # without re-implementing the kernel's role query. Its absence WAS blocker B1.
 # 0.1.0a63 added the external-identity binding workstream 4's login path needs.
-dotmac-kernel = { version = "0.1.0a63", source = "forgejo" }
+# 0.1.0a64 added `external_identity.finalize_external_login` — the ONLY entry
+# point a caller may end a session on. It takes the binding under a row lock,
+# re-checks under that lock, stamps `last_authenticated_at`, and hands back the
+# party so the caller mints its session in the SAME transaction. The pair it
+# replaces (`resolve_external_identity` then issue) leaves a window in which an
+# administrator can disable a binding and still get a live session derived from
+# it, with both audit trails looking correct. This assembly could not close B2
+# on a63 without reproducing that window, so the pin moves rather than the code
+# working around it.
+dotmac-kernel = { version = "0.1.0a64", source = "forgejo" }
 # The tenant's connected-application portfolio, and the permanent owner of the
 # `ApplicationDescriptor` contract (ADR-0021 §4). This assembly is its INTENDED
 # first consumer and is not yet one: nothing here is deployed, so the module's
@@ -33,6 +42,21 @@ dotmac-kernel = { version = "0.1.0a63", source = "forgejo" }
 # naming a foreign revision. THIS assembly answers those requirements — see
 # `src/dotmac_workspace/migration_bindings.py`.
 dotmac-application-directory = { version = "0.1.0a3", source = "forgejo" }
+# The fleet's OIDC relying party (ADR-0006's stateless-protocol-adapter
+# classification). This assembly is its FIRST consumer, and the pilot that
+# earned its release: the adapter lane was held shut until a real login ran
+# against a shared, atomic StateStore rather than a per-process one.
+#
+# EXACT pin, not a caret. This package ends at a verified (issuer, subject) and
+# nothing else — no local party lookup, no session, no cookie, no provider
+# branch — so a "compatible" upgrade would still be a change to how identity is
+# PROVED here, and that is not a decision to inherit from a resolver.
+#
+# 0.1.0a1 carries the request-bound `state_store` seam this assembly needs: its
+# store holds one request's `Session`, and `dotmac_kernel.db` owns when that
+# transaction commits (hard rule 8), so the store cannot be held for the life of
+# a client. See `identity/state_store.py`.
+dotmac-auth-oidc = { version = "0.1.0a1", source = "forgejo" }
 uvicorn = { extras = ["standard"], version = "^0.30" }
 # The one Workspace database's driver. Separate from every application's
 # database by ADR-0021 §1 — there is no product DSN here and no cross-database
@@ -41,18 +65,43 @@ psycopg = { version = "^3.2", extras = ["binary"] }
 # Migrations: the kernel's shipped base lineage and the directory module's
 # lineage are composed programmatically at deploy time — see `alembic/env.py`.
 alembic = "^1.13"
+# The OIDC relying-party half. The kernel does no protocol — deliberately, and
+# it says so — so discovery, the token exchange and the JWKS fetch are this
+# httpx and pyjwt are NOT here any more, and their absence is the point.
+#
+# They were direct runtime dependencies because this assembly carried its own
+# OIDC implementation: its own discovery client, its own JWKS fetch, its own
+# ID-token verification. `dotmac-auth-oidc` owns that protocol now, so the
+# assembly no longer speaks HTTP to an identity provider or verifies a
+# signature, and declaring the libraries that do would claim a capability this
+# code does not have. They arrive transitively through the adapter, which is
+# where the version floors that matter live — in particular pyjwt >=2.13, a
+# SECURITY floor (GHSA-jq35-7prp-9v3f, an algorithm allow-list bypass) that the
+# adapter pins and this assembly must not undercut by declaring a looser one.
+#
+# pyjwt reappears in the dev group: the tests sign ID tokens to stand in for an
+# identity provider, which is a test concern and not a runtime one.
 
 # Dotmac packages resolve from Forgejo; everything else from PyPI. `explicit` so
-# ONLY the two names above are pulled from here — no dependency-confusion
-# aggregation of public names.
+# ONLY the three `dotmac-*` names above are pulled from here — no
+# dependency-confusion aggregation of public names.
 [[tool.poetry.source]]
 name = "forgejo"
 url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
 priority = "explicit"
 
+# The operator's way in, before anybody can log in: members, their role, and
+# their external identity bindings. See `dotmac_workspace.identity.cli`.
+[tool.poetry.scripts]
+dotmac-workspace = "dotmac_workspace.identity.cli:main"
+
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"
-httpx = "^0.27"
+# The tests stand in for an identity provider: they mint ID tokens signed with a
+# throwaway RSA key so `dotmac-auth-oidc`'s REAL verification runs against them.
+# Stubbing the verifier instead would make the pilot prove nothing — that is
+# precisely the defect the package's own dossier records about ERP's suite.
+pyjwt = { version = "^2.13", extras = ["crypto"] }
 ruff = "^0.6"
 mypy = "^1.11"
 
@@ -69,8 +118,14 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # asserts are the point in tests; S105/S106 flag dummy fixture "passwords"
-# that are not real secrets.
-"tests/**" = ["S101", "S105", "S106"]
+# that are not real secrets. S608 flags an interpolated table NAME in the
+# canaries' raw SQL — the interpolated value is a module constant naming the
+# table under test, and every caller-supplied value in those statements is a
+# bound parameter. Writing the canaries in the ORM instead would defeat their
+# purpose: what is under test is what the DATABASE does, and going through the
+# same session the application uses would let an application-side filter
+# masquerade as a policy.
+"tests/**" = ["S101", "S105", "S106", "S608"]
 
 [tool.mypy]
 python_version = "3.12"
