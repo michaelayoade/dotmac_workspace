@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -137,26 +138,69 @@ def test_the_composed_flow_uses_the_postgres_store() -> None:
     assert isinstance(built, state_store.PostgresStateStore)
 
 
+def _selects_store_by_truthiness(source: str) -> list[str]:
+    """`store or <anything>` — as SYNTAX, not as text.
+
+    AST, deliberately. The first version of this guard was a substring search
+    for `"store or "`, and it failed on the COMMENT explaining the defect it was
+    guarding against: the only way to satisfy it was to delete the explanation.
+    That is the fleet rule — an executable invariant matches call sites, never
+    concepts (ADR-0018, and the same lesson three times over in the kernel).
+    """
+    found: list[str] = []
+    for node in ast.walk(ast.parse(textwrap.dedent(source))):
+        if not isinstance(node, ast.BoolOp) or not isinstance(node.op, ast.Or):
+            continue
+        first = node.values[0]
+        if isinstance(first, ast.Name) and first.id == "store":
+            found.append(f"line {node.lineno}: `store or ...`")
+    return found
+
+
 def test_an_explicitly_supplied_store_is_never_silently_replaced() -> None:
-    """`is not None`, not truthiness — a regression, found by CI.
+    """A regression, found by CI.
 
     A store is an object with a `__len__`, so an EMPTY one is falsy. Written as
     `store or _request_store(...)`, the first ceremony of every test — and of
     any caller passing a fresh store — went to a real database store instead of
-    the one supplied. It failed loudly here because the double's session is
-    `object()`; in a caller holding a real session it would have failed
-    silently, writing to a table the caller never meant to touch.
+    the one supplied. It failed loudly in the suite because the double's session
+    is `object()`; in a caller holding a real session it would have failed
+    SILENTLY, writing to a table the caller never meant to touch.
     """
-    supplied = _EmptyStore()
-    assert not supplied, "the double must be falsy or this proves nothing"
+    assert not _EmptyStore(), "the double must be falsy or this proves nothing"
 
     for func in (service.begin_login, service.complete_login):
         source = inspect.getsource(func)
-        assert "store or " not in source, (
-            f"{func.__name__} selects its store by truthiness — an empty store "
-            "is falsy and would be replaced by a database one"
+        assert not _selects_store_by_truthiness(source), (
+            f"{func.__name__} selects its store by truthiness: "
+            f"{_selects_store_by_truthiness(source)}. An empty store is falsy "
+            "and would be replaced by a database one — use `is not None`."
         )
-        assert "store is not None" in source
+        assert (
+            "store is not None" in source
+        ), f"{func.__name__} no longer selects its store explicitly"
+
+
+def test_the_truthiness_guard_fires_on_the_shape_it_forbids() -> None:
+    """Sensitivity, and specificity.
+
+    The first two are the defect in both spellings. The third is the CORRECT
+    form, and the fourth is the comment that broke the substring version of this
+    guard — neither may fire, or the guard is back to punishing the
+    explanation.
+    """
+    assert _selects_store_by_truthiness("x = store or default()")
+    assert _selects_store_by_truthiness("x = store or a or b")
+    assert not _selects_store_by_truthiness(
+        "x = store if store is not None else default()"
+    )
+    assert not _selects_store_by_truthiness(
+        "# `is not None`, never `store or ...`: an empty store is falsy\nx = 1"
+    )
+    assert not _selects_store_by_truthiness("x = other_store or default()"), (
+        "the guard fires on any `<name> or ...` — it must name the parameter "
+        "it is about, or it will flag unrelated defaulting elsewhere"
+    )
 
 
 class _EmptyStore:
