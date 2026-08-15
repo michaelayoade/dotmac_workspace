@@ -34,9 +34,11 @@ from dotmac_kernel import (  # noqa: F401
 )
 from dotmac_kernel.messaging import models as messaging_models  # noqa: F401
 from dotmac_kernel.models import Base
+from dotmac_kernel.planes import install_module_plane_selections
 from dotmac_kernel.prerequisites import install_prerequisite_bindings
 from sqlalchemy import engine_from_config, pool
 
+from dotmac_workspace.assembly import build_spec
 from dotmac_workspace.migration_bindings import ASSEMBLY_PREREQUISITE_BINDINGS
 from dotmac_workspace.migrations import composed_version_locations
 
@@ -55,6 +57,17 @@ if not config.get_main_option("version_locations"):
 # `install_` (not `setdefault`) on purpose: this is the assembly's answer, and
 # there is exactly one per assembly.
 install_prerequisite_bindings(ASSEMBLY_PREREQUISITE_BINDINGS)
+
+# A SEPARATE declaration from the bindings above, and deliberately so (ADR-0028).
+# A binding answers where a database effect comes from; it cannot also answer
+# which part of a selectable module this product intends to install, because
+# nothing is missing in that case and so nothing can be inferred. The Workspace's
+# selection is empty today — `application_directory` has an atomic tenant plane —
+# and it is read off the assembly spec rather than restated here, so the
+# migration environment and the running application can never disagree.
+install_module_plane_selections(
+    config.attributes.get("module_plane_selections", build_spec().module_planes)
+)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
