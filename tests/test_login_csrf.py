@@ -274,8 +274,7 @@ def test_the_matching_pair_still_completes(
 #: A module whose only mention of the call is a docstring. Exactly the shape
 #: that broke the substring version of the guard below.
 DOCSTRING_MENTIONING_THE_CALL = (
-    '"""Compared with secrets.compare_digest by the package."""\n'
-    "x = 1\n"
+    '"""Compared with secrets.compare_digest by the package."""\n' "x = 1\n"
 )
 
 
