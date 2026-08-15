@@ -1,25 +1,39 @@
 # Adoption blockers
 
-**This repository is a local scaffold. It is not shipped, not deployed, and not
-a consumer of anything.** `dotmac-application-directory` stays `audit-complete`
-with ZERO production consumers until every blocker below is cleared and the
-Workspace actually runs in production.
+**This repository is not deployed, and is therefore still not a consumer of
+anything.** `dotmac-application-directory` stays `audit-complete` with ZERO
+production consumers until every blocker below is cleared AND the Workspace
+actually runs in production — the second half of that sentence is the one that
+matters now, because the first half is nearly done.
+
+What changed on 2026-08-15: B2 closed, so the launcher is reachable end to end
+for the first time. What did not change: nothing here runs anywhere. "It can be
+reached" and "it is in production" are different claims, and only the first one
+is now true.
 
 Recorded here rather than in a ticket because ADR-0018's rule applies: an
 exemption must state an enforceable premise, or the region is unmonitored rather
 than exempt. `tests/test_adoption_blockers.py` fails if this file stops naming
-the permission code, or stops recording that the surface is unreachable — so the
-gap cannot quietly disappear, in either direction.
+the permission code, or stops naming B2 and the cookie — so the gap cannot
+quietly disappear, in either direction. That test is a two-directional ratchet
+by design: when B2 closed, the assertion that the surface was UNREACHABLE was
+inverted rather than deleted, because keeping it would have forced this file to
+keep claiming a gap the code no longer has.
 
 Status at a glance:
 
 | | | |
 |---|---|---|
 | B1 | no cookie-compatible permission seam | **cleared** 2026-08-15 |
-| B2 | nothing issues `dmws_session`, no `/login` | **open** — a separate workstream |
-| B3 | pinned dependencies not published | **half cleared** — kernel yes, directory no |
-| B4 | no remote, no lock, no CI evidence | **written, unproven** |
+| B2 | nothing issues `dmws_session`, no `/login` | **cleared** 2026-08-15 |
+| B3 | pinned dependencies not published | **cleared** 2026-08-15 |
+| B4 | no remote, no lock, no CI evidence | **partly cleared** — remote and lock yes, results pending |
 | B5 | kernel `testing` extra declared and unused | cleared 2026-08-12 |
+
+One follow-up is OPEN and belongs to the kernel rather than to this repository:
+**session provenance** (`auth_sessions.external_identity_binding_id`). It is
+recorded under B2 below rather than as a new blocker, because it does not stop
+this Workspace running — it bounds what disabling a binding can do.
 
 ## B1 — There is no cookie-compatible permission seam in the kernel
 
@@ -68,30 +82,88 @@ must not quietly become an opinion about the other side.
 
 ## B2 — Nothing issues `dmws_session`, and there is no `/login`
 
-**Open. This is what keeps the repository a scaffold.**
+**Cleared 2026-08-15.** `/applications` is reachable end to end for the first
+time: it redirects to a `/login` that exists, and a member who completes the
+ceremony arrives back holding a `dmws_session` this repository issued.
 
-`require_workspace_auth` redirects to `/login`, which does not exist. No route in
-this repository mints or sets the `dmws_session` cookie. So `/applications` is
-still unreachable end to end: it redirects, and the redirect target 404s.
+What now exists (`src/dotmac_workspace/identity/`):
 
-The Workspace needs its own login path — its own cookie, its own session — built
-on `dotmac_kernel.deps.authenticate_request` (the shared validation seam) rather
-than on a re-implementation, and, for the federated case, on the
-external-identity binding added in `dotmac-kernel 0.1.0a63`
-(`dotmac_kernel.external_identity`). That is a separate workstream and is
-deliberately not started here.
+| | |
+|---|---|
+| `GET /login` | the front door; one control, and it is a POST |
+| `POST /login` | starts a ceremony and sends the browser to the provider |
+| `GET /login/callback` | completes it, or refuses |
+| `POST /logout` | revokes the session, under the CSRF header bridge |
 
-Until B2 clears the launcher must not be exposed to a real tenant — no longer
-because it is unguarded, but because nobody can get past the guard.
+Six properties hold it up, and each is enforced somewhere:
+
+1. **Its own cookie and its own session.** `dmws_session`, host-only (no
+   `Domain` attribute, ever), `HttpOnly`, `SameSite=Lax`. The row is a kernel
+   `AuthSession`, so `dotmac_kernel.deps.authenticate_request` stays the ONE
+   validation seam and an auth-tightening kernel fix still reaches this plane
+   for free. Nothing is shared with any application (ADR-0021 §1).
+2. **`finalize_external_login`, never `resolve_external_identity`.** Kernel
+   `0.1.0a64` exists because resolving and then issuing leaves a window in
+   which an administrator disables a binding and still gets a live session
+   derived from it, with both audit trails looking correct. The callback takes
+   the binding under a row lock and mints the session in the SAME transaction,
+   so the login and a concurrent disable serialize. `tests/
+   test_no_resolve_then_issue.py` AST-forbids the racy pair anywhere in `src/`.
+3. **Shared, atomic ceremony state.** `public.workspace_login_states`, consumed
+   by one `DELETE … RETURNING`, so a login started on one worker completes on
+   another and a state works exactly once. There is no in-memory store in the
+   package at all — the test double lives in `tests/conftest.py`, outside the
+   wheel, where no configuration can reach it.
+4. **Opaque state, PKCE S256, and a nonce.** The `state` parameter is a 256-bit
+   random; the verifier, the nonce and the return path never travel.
+5. **The client secret is HELD.** Loaded once by a startup hook (ADR-0009),
+   read afterwards as a dictionary lookup. Nothing on the request path reads
+   the environment or contacts a store.
+6. **Explicit binding only.** No JIT provisioning and no email linking — an
+   unbound subject is refused. `dotmac-workspace bind` is how an operator
+   creates one, with `bound_by` and `reason` required.
+
+### The follow-up this repository could NOT do: session provenance
+
+The kernel's `external_identity` docstring describes a deferred contract:
+`auth_sessions.external_identity_binding_id`, so that disabling a binding can
+SELECTIVELY revoke the sessions derived from it — never a global logout.
+
+**That column lives on a KERNEL table** (`public.auth_sessions`,
+`dotmac_kernel/models.py`, kernel migration lineage). Adding it needs a kernel
+migration, a new kernel revocation operation taking the same row lock as
+`disable_external_identity_binding`, and an issuance path that stamps it. This
+repository does not modify the kernel, so **it is reported rather than
+implemented, and it is a kernel `0.1.0a65`.**
+
+What was done Workspace-side instead is the use the kernel names as legitimate
+today: `binding_id` is recorded in the `workspace.login.succeeded` audit event's
+details, so the provenance exists in the trail. What was deliberately NOT done
+is a Workspace-owned shadow table. It would have looked like progress and would
+have made this plane a second writer of session revocation, in a different
+transaction from the kernel's disable — precisely the "two calls a caller can do
+half of" that the kernel contract forbids, and a migration off a parallel
+authority when a65 lands.
+
+**The consequence, stated plainly:** disabling a binding stops any FURTHER
+session being derived from it immediately (the two calls take the same row
+lock). A session ALREADY issued from that binding stays valid until it expires.
+`dotmac-workspace disable` prints this rather than implying otherwise.
 
 ## B3 — The pinned dependencies are not published
 
 **Cleared (2026-08-15).**
 
-- `dotmac-kernel 0.1.0a63` is published and resolves from the Forgejo index.
+- `dotmac-kernel 0.1.0a64` is published and resolves from the Forgejo index.
 - `dotmac-application-directory 0.1.0a3` is published and resolves.
 
 `poetry.lock` is generated and committed, and both pins install.
+
+The kernel pin MOVED from a63 to a64 for the login path, and the move was the
+alternative to a workaround rather than an upgrade for its own sake: a63 has
+`resolve_external_identity` and no locking finalizer, so a callback built on it
+would have had to resolve and then issue — reproducing the exact window a64
+exists to close. The pin moved; the code did not work around it.
 
 The history is worth keeping, because it is why the version is a3 rather than
 a2. When this repository first pinned the directory, **no version of it existed
@@ -108,9 +180,9 @@ green-looking branch built on a dependency that did not exist.
 
 Do not work around this by relaxing a pin or adding a path dependency
 (AGENTS.md §6). Build the wheel locally and install it into the venv without
-touching `pyproject.toml` — see the README. The `from-wheel` CI job fails at its
-install step for exactly this reason today, and that is the correct behaviour: an
-unpublished pin should be a loud failure, never a quiet substitution.
+touching `pyproject.toml` — see the README. The `from-wheel` CI job installs the
+built wheel into a clean virtualenv and resolves its pins from the index, so an
+unpublished pin fails there, loudly, rather than being quietly substituted.
 
 One shape change in 0.1.0a2 that this repository already accommodates: its
 lineage root declares `requires=("tenant_scope_catalog.v1",
@@ -118,11 +190,14 @@ lineage root declares `requires=("tenant_scope_catalog.v1",
 ASSEMBLY answers those requirements — `src/dotmac_workspace/migration_bindings.py`,
 installed by `alembic/env.py` and exported to Alembic's graph commands through
 `DOTMAC_MIGRATION_BINDINGS`. It also floors the kernel at `>=0.1.0a56`, which
-`0.1.0a63` satisfies.
+`0.1.0a64` satisfies.
 
 ## B4 — No remote, no lock, no CI evidence
 
-**Written, unproven.** The jobs now exist. None of them has ever run.
+**Partly cleared.** The remote exists, `main` is protected and requires a pull
+request with four green jobs, and `poetry.lock` is committed. What remains is
+what always remained: a claim about CI is a claim about a RESULT, and each job's
+first genuine run is the only thing that turns a written job into evidence.
 
 Added:
 
@@ -138,16 +213,21 @@ Added:
 - `docker-compose.test.yml` and `make test-db-up` / `make test-db` /
   `make test-db-down`, so a CI run and a laptop run configure one thing.
 
-Still open, and each blocks the next:
+The **postgres** job also now runs the two login canaries added with B2:
+`tests/db/test_state_store_atomicity.py`, which drives two threads through the
+same ceremony and asserts that exactly one consumed it, and
+`tests/db/test_login_state_isolation.py`, which proves the tenant boundary on
+`workspace_login_states` through the ONLINE role.
 
-1. **No lock file.** It cannot be generated until B3 clears — `poetry lock`
-   fails on the unpublished module.
-2. **No Git remote.** The Governance engine reads the observed origin and
-   default branch and compares them to the profile's `repository` block, so the
-   standards job cannot pass without one. The profile itself parses and verifies
-   cleanly against the pinned engine when an origin is supplied.
-3. **No run of any workflow.** Every claim in this file about CI is a claim
-   about a file, not about a result.
+Still open:
+
+1. **Results, not files.** Every property proven by `tests/db` is proven only
+   by a green `postgres` job; a run that has not happened is not evidence, and
+   nothing in this repository may claim otherwise.
+2. **The `from-wheel` job has the least history.** It is the only job that
+   exercises the built artifact — package data, `__file__`-relative paths, a
+   dependency satisfied only by the dev group — and the class of failure it
+   catches is invisible everywhere else.
 
 ## B5 — The kernel `testing` extra was declared and unused
 

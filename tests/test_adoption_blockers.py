@@ -23,10 +23,18 @@ import ast
 import inspect
 from pathlib import Path
 
+from dotmac_workspace import web_auth
 from dotmac_workspace.launcher import guard
 
 BLOCKERS = Path(__file__).resolve().parents[1] / "docs" / "ADOPTION-BLOCKERS.md"
 GUARD_SOURCE = Path(inspect.getfile(guard)).read_text(encoding="utf-8")
+AUTH_SOURCE = Path(inspect.getfile(web_auth)).read_text(encoding="utf-8")
+#: Both halves of the Workspace's guard: "may you?" (the launcher's, which
+#: declares the permission) and "who are you?" (the assembly's, which reads the
+#: cookie). The forbidden query is forbidden in BOTH — the wrong fix is
+#: available in whichever file somebody opens next, so the guard follows the
+#: property rather than one path it used to live at.
+GUARDED_SOURCES = {"launcher/guard.py": GUARD_SOURCE, "web_auth.py": AUTH_SOURCE}
 
 
 def test_the_blockers_file_exists_and_names_the_permission_code() -> None:
@@ -42,16 +50,72 @@ def test_the_blockers_file_exists_and_names_the_permission_code() -> None:
     )
 
 
-def test_the_blockers_file_still_records_an_unreachable_surface() -> None:
-    """B2 is workstream 4's, and it is what keeps this repository a scaffold.
+def test_the_blockers_file_records_b2_against_a_surface_that_now_exists() -> None:
+    """B2 was "nothing issues `dmws_session`, and there is no `/login`".
 
-    A blockers file that quietly stopped naming B2 while nothing minted
-    `dmws_session` would be this repository claiming to be deployable when
-    `/applications` still redirects to a route that does not exist.
+    This assertion has been INVERTED, deliberately, and the inversion is the
+    interesting part. It used to require the file to keep saying the surface
+    was unreachable; keeping that after the surface existed would have forced
+    the documentation to claim a gap the code no longer has — the same drift,
+    pointing the other way (ADR-0018's two-directional ratchet).
+
+    So it now requires the file to keep naming B2 AND the cookie, and it
+    requires the CODE to actually mint that cookie: a blockers file that
+    declared B2 closed while nothing set `dmws_session` would be the lie in the
+    other direction.
     """
     text = BLOCKERS.read_text(encoding="utf-8")
     assert "B2" in text
     assert "dmws_session" in text
+
+    from dotmac_workspace.identity import session
+    from dotmac_workspace.session_contract import SESSION_COOKIE
+
+    source = Path(inspect.getfile(session)).read_text(encoding="utf-8")
+    assert SESSION_COOKIE == "dmws_session"
+    assert "set_cookie" in source, (
+        "B2 is only closed while something in this repository actually sets "
+        "the Workspace session cookie"
+    )
+
+
+def test_the_role_check_guard_does_not_fire_on_prose_describing_it() -> None:
+    """The guard above matches AST nodes, never words in a file.
+
+    Three guards in this programme have flagged the comment explaining the very
+    invariant they enforced, and the cheapest way to satisfy such a guard is to
+    delete the explanation. Both guarded modules DO name `PartyRoleGrant`,
+    `Role`, `select` and `execute` in their docstrings — that is how a reader
+    learns what is forbidden — and the guard must be indifferent to it.
+    """
+    prose = (
+        '"""This module must never query PartyRoleGrant or Role, and never '
+        'call select, execute, scalars or query."""\n'
+        "VALUE = 1\n"
+    )
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(prose)):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+    forbidden = {"PartyRoleGrant", "Role", "select", "execute", "scalars", "query"}
+    assert not (forbidden & names), (
+        "the detector matched prose. A guard that cannot tell an explanation "
+        "from a call site is a guard whose cheapest fix is deleting the "
+        "explanation."
+    )
+
+    # And the sensitivity half: it DOES fire on a real call site. A detector
+    # that never fires passes every review for the wrong reason.
+    real = "from x import Role\nrows = db.query(Role).all()\n"
+    caught: set[str] = set()
+    for node in ast.walk(ast.parse(real)):
+        if isinstance(node, ast.Name):
+            caught.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            caught.add(node.attr)
+    assert forbidden & caught
 
 
 def test_the_guard_still_names_the_decision_it_enforces() -> None:
@@ -79,19 +143,20 @@ def test_the_guard_does_not_hand_roll_a_role_check() -> None:
     the fix is to remove it and press for the seam.
     """
     forbidden = {"PartyRoleGrant", "Role", "select", "execute", "scalars", "query"}
-    names: set[str] = set()
-    for node in ast.walk(ast.parse(GUARD_SOURCE)):
-        if isinstance(node, ast.Name):
-            names.add(node.id)
-        elif isinstance(node, ast.Attribute):
-            names.add(node.attr)
-    offenders = forbidden & names
-    assert not offenders, (
-        f"the Workspace guard is querying authorization state itself "
-        f"({sorted(offenders)}). B1 is closed by a kernel permission seam that "
-        "works for cookie-authenticated callers, never by duplicating the "
-        "kernel's role logic here."
-    )
+    for label, source in GUARDED_SOURCES.items():
+        names: set[str] = set()
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Name):
+                names.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                names.add(node.attr)
+        offenders = forbidden & names
+        assert not offenders, (
+            f"{label} is querying authorization state itself "
+            f"({sorted(offenders)}). B1 is closed by a kernel permission seam "
+            "that works for cookie-authenticated callers, never by duplicating "
+            "the kernel's role logic here."
+        )
 
 
 def test_the_kernel_dependency_declares_no_unused_extra() -> None:

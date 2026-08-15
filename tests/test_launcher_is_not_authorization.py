@@ -17,10 +17,16 @@ import ast
 import inspect
 from pathlib import Path
 
+from dotmac_workspace import web_auth
 from dotmac_workspace.launcher import guard, web
 
 WEB_SOURCE = Path(inspect.getfile(web)).read_text(encoding="utf-8")
 GUARD_SOURCE = Path(inspect.getfile(guard)).read_text(encoding="utf-8")
+#: "Who are you?" moved to the ASSEMBLY level when the identity feature
+#: arrived: every surface asks it, and no feature should have to import another
+#: feature to authenticate. The two properties below moved with the code —
+#: they were properties of the guard, never of the file it happened to live in.
+AUTH_SOURCE = Path(inspect.getfile(web_auth)).read_text(encoding="utf-8")
 
 
 def _called_names(source: str) -> set[str]:
@@ -157,18 +163,16 @@ def test_the_guard_does_not_reimplement_token_validation() -> None:
     """It delegates to `authenticate_request` — the ONE seam both the bearer and
     cookie flows go through — so an auth-tightening fix lands once and reaches
     here. Re-deriving validation is how a plane falls behind a security fix."""
-    assert "authenticate_request" in _called_names(GUARD_SOURCE)
+    assert "authenticate_request" in _called_names(AUTH_SOURCE)
     for reimplementation in ("decode", "verify_signature", "parse_token"):
-        assert reimplementation not in _called_names(GUARD_SOURCE)
+        assert reimplementation not in _called_names(AUTH_SOURCE)
 
 
 def test_the_guard_fails_closed_to_a_redirect_on_every_path() -> None:
     """No cookie and an invalid token produce the SAME outcome. A guard that
     distinguished them would tell an unauthenticated caller something."""
     raised = [
-        node
-        for node in ast.walk(ast.parse(GUARD_SOURCE))
-        if isinstance(node, ast.Raise)
+        node for node in ast.walk(ast.parse(AUTH_SOURCE)) if isinstance(node, ast.Raise)
     ]
     assert len(raised) == 2, "expected exactly the no-cookie and no-party paths"
     for node in raised:

@@ -21,7 +21,16 @@ python = ">=3.12,<3.14"
 # assembly authorize a COOKIE-authenticated caller against a declared permission
 # without re-implementing the kernel's role query. Its absence WAS blocker B1.
 # 0.1.0a63 added the external-identity binding workstream 4's login path needs.
-dotmac-kernel = { version = "0.1.0a63", source = "forgejo" }
+# 0.1.0a64 added `external_identity.finalize_external_login` — the ONLY entry
+# point a caller may end a session on. It takes the binding under a row lock,
+# re-checks under that lock, stamps `last_authenticated_at`, and hands back the
+# party so the caller mints its session in the SAME transaction. The pair it
+# replaces (`resolve_external_identity` then issue) leaves a window in which an
+# administrator can disable a binding and still get a live session derived from
+# it, with both audit trails looking correct. This assembly could not close B2
+# on a63 without reproducing that window, so the pin moves rather than the code
+# working around it.
+dotmac-kernel = { version = "0.1.0a64", source = "forgejo" }
 # The tenant's connected-application portfolio, and the permanent owner of the
 # `ApplicationDescriptor` contract (ADR-0021 §4). This assembly is its INTENDED
 # first consumer and is not yet one: nothing here is deployed, so the module's
@@ -41,6 +50,19 @@ psycopg = { version = "^3.2", extras = ["binary"] }
 # Migrations: the kernel's shipped base lineage and the directory module's
 # lineage are composed programmatically at deploy time — see `alembic/env.py`.
 alembic = "^1.13"
+# The OIDC relying-party half. The kernel does no protocol — deliberately, and
+# it says so — so discovery, the token exchange and the JWKS fetch are this
+# assembly's, and they need an HTTP client with real timeouts. A RUNTIME
+# dependency now rather than a dev one: it moved out of the dev group in the
+# same change that made the login path depend on it.
+httpx = "^0.27"
+# ID token verification. A hand-rolled JWS verifier is the wrong place to save
+# a dependency: the failure mode of getting it subtly wrong is that every token
+# verifies. `crypto` pulls `cryptography` for the asymmetric algorithms —
+# `dotmac_workspace.identity.oidc.ALLOWED_ALGORITHMS` is asymmetric only, since
+# accepting HMAC is how a verifier is made to check a token against a value the
+# attacker already has.
+pyjwt = { version = "^2.9", extras = ["crypto"] }
 
 # Dotmac packages resolve from Forgejo; everything else from PyPI. `explicit` so
 # ONLY the two names above are pulled from here — no dependency-confusion
@@ -50,9 +72,13 @@ name = "forgejo"
 url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
 priority = "explicit"
 
+# The operator's way in, before anybody can log in: members, their role, and
+# their external identity bindings. See `dotmac_workspace.identity.cli`.
+[tool.poetry.scripts]
+dotmac-workspace = "dotmac_workspace.identity.cli:main"
+
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3"
-httpx = "^0.27"
 ruff = "^0.6"
 mypy = "^1.11"
 
@@ -69,8 +95,14 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # asserts are the point in tests; S105/S106 flag dummy fixture "passwords"
-# that are not real secrets.
-"tests/**" = ["S101", "S105", "S106"]
+# that are not real secrets. S608 flags an interpolated table NAME in the
+# canaries' raw SQL — the interpolated value is a module constant naming the
+# table under test, and every caller-supplied value in those statements is a
+# bound parameter. Writing the canaries in the ORM instead would defeat their
+# purpose: what is under test is what the DATABASE does, and going through the
+# same session the application uses would let an application-side filter
+# masquerade as a policy.
+"tests/**" = ["S101", "S105", "S106", "S608"]
 
 [tool.mypy]
 python_version = "3.12"

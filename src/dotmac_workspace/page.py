@@ -1,0 +1,59 @@
+"""The Workspace's HTML shell — one `<head>`, so the CSRF bridge is never absent.
+
+Small on purpose. This assembly has two screens; a template engine, a layout
+hierarchy and a component library would all be scaffolding around eleven lines
+of markup. What it must NOT be is two hand-written shells, because the thing
+they carry is not decoration.
+
+## What the shell actually carries
+
+`static/js/csrf.js` (the kernel's) copies the `csrf_token` COOKIE onto the
+`X-CSRF-Token` HEADER for every htmx request. `dotmac_kernel.middleware.csrf`
+validates one against the other — double submit — which is why the cookie is
+deliberately not `HttpOnly`.
+
+A plain `<form method="post">` has no hook for attaching a custom header, so
+**every mutating control in this assembly uses `hx-post`**, never a bare
+`method="post"`. A page that forgot these two script tags would render a logout
+button that silently 403s; a page that used a bare form would do the same. One
+shell means neither can happen on one screen and not the other.
+
+Everything is served from `/static`, which `create_app` mounts from the
+kernel's packaged assets. Nothing is inline, nothing is remote: the kernel's
+default Content-Security-Policy is `script-src 'self'`, and an inline handler
+here would be a policy exception argued for by a button.
+"""
+
+from __future__ import annotations
+
+import html
+from typing import Final
+
+#: Kernel-packaged, served from the `/static` mount `create_app` installs.
+_HTMX: Final[str] = "/static/js/htmx.min.js"
+_CSRF_BRIDGE: Final[str] = "/static/js/csrf.js"
+
+
+def render_page(*, title: str, body: str) -> str:
+    """One page. `title` is escaped; `body` is markup the caller assembled.
+
+    `body` is NOT escaped — it is composed markup, and every value interpolated
+    into it is escaped at the point it is interpolated (see `launcher.web._tile`
+    and this module's callers). That split is the usual one, and it is worth
+    naming: the shell escapes what it is given as TEXT and trusts what it is
+    given as MARKUP, so a caller that forgets to escape a value has made the
+    mistake in a place a reader is looking for it.
+    """
+    return (
+        "<!doctype html>"
+        '<html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        f"<title>{html.escape(title)} — DotMac Workspace</title>"
+        f'<script src="{_HTMX}" defer></script>'
+        f'<script src="{_CSRF_BRIDGE}" defer></script>'
+        "</head>"
+        f"<body><main>{body}</main></body></html>"
+    )
+
+
+__all__ = ["render_page"]
