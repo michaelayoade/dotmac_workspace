@@ -1,0 +1,103 @@
+# The Workspace, deployed. One service, because that is all it is.
+#
+# Not `docker-compose.test.yml`, which stands up a disposable Postgres for the
+# migration and RLS canaries and is deliberately separate: a file that served
+# both would end up with a production default nobody meant to ship, or a test
+# default nobody meant to deploy.
+#
+# ## No database here
+#
+# The Workspace's one database lives on the fleet's Postgres host, reached by
+# DSN. Running it beside the app would put a stateful volume on the app host and
+# make "restore the Workspace" a different procedure from "restore anything
+# else". ADR-0021 §1 is about the Workspace sharing no database with a PRODUCT;
+# it says nothing about co-locating a server, and the fleet's answer to that is
+# already db-primary.
+#
+# ## Everything by config, nothing hardcoded
+#
+# Every value is `${VAR:-default}` with the default documented in
+# `.env.example`. The three that have NO default — `DATABASE_URL`,
+# `WORKSPACE_OIDC_ISSUER`, `WORKSPACE_OIDC_CLIENT_ID` — are deliberately fatal
+# when unset: a Workspace with no database is broken, and one with no provider
+# serves a `/login` nobody can complete. `configuration_errors` in the assembly
+# is what turns that into a refusal to start rather than a healthy-looking
+# process.
+
+services:
+  workspace:
+    image: ${WORKSPACE_IMAGE:-registry.dotmac.io/dotmac/workspace}:${WORKSPACE_TAG:-latest}
+    restart: unless-stopped
+    # Published on loopback only. TLS termination and the public name belong to
+    # the reverse proxy; a container port on 0.0.0.0 bypasses ufw entirely
+    # (docker writes its own iptables rules), which is how a service intended to
+    # be internal ends up reachable from the internet.
+    ports:
+      - "${WORKSPACE_BIND:-127.0.0.1}:${WORKSPACE_PORT:-8000}:8000"
+    environment:
+      # ── the database ────────────────────────────────────────────────────
+      # The ONLINE role, which holds no DDL privilege. Migrations run as the
+      # admin role from the deploy path — see docs/PILOT-RUNBOOK.md.
+      DATABASE_URL: ${DATABASE_URL:?the Workspace has no database without this}
+
+      # ── the identity provider ───────────────────────────────────────────
+      WORKSPACE_OIDC_ISSUER: ${WORKSPACE_OIDC_ISSUER:?no provider means no login}
+      WORKSPACE_OIDC_CLIENT_ID: ${WORKSPACE_OIDC_CLIENT_ID:?required}
+      # MUST match the redirect URI registered at the provider exactly —
+      # scheme, host, port and path. A mismatch is refused by the provider, not
+      # by us, and the error it shows the member says nothing useful.
+      WORKSPACE_OIDC_REDIRECT_URL: ${WORKSPACE_OIDC_REDIRECT_URL:?required}
+      WORKSPACE_OIDC_PROVIDER_BINDING: ${WORKSPACE_OIDC_PROVIDER_BINDING:-primary}
+      WORKSPACE_OIDC_SCOPES: ${WORKSPACE_OIDC_SCOPES:-openid}
+      WORKSPACE_OIDC_DISCOVERY_URL: ${WORKSPACE_OIDC_DISCOVERY_URL:-}
+      WORKSPACE_OIDC_HTTP_TIMEOUT_SECONDS: ${WORKSPACE_OIDC_HTTP_TIMEOUT_SECONDS:-10}
+      WORKSPACE_OIDC_METADATA_TTL_SECONDS: ${WORKSPACE_OIDC_METADATA_TTL_SECONDS:-900}
+      WORKSPACE_OIDC_CEREMONY_TTL_SECONDS: ${WORKSPACE_OIDC_CEREMONY_TTL_SECONDS:-600}
+      WORKSPACE_OIDC_CLOCK_SKEW_SECONDS: ${WORKSPACE_OIDC_CLOCK_SKEW_SECONDS:-60}
+
+      # The client secret arrives as a FILE, never as a value in this file or
+      # in the environment of a `docker inspect`. See `secrets:` below.
+      WORKSPACE_OIDC_CLIENT_SECRET_FILE: /run/secrets/workspace_oidc_client_secret
+
+      # ── the proxy in front ──────────────────────────────────────────────
+      # `is_secure_request` decides whether the session and ceremony cookies
+      # carry `Secure`, and it reads the forwarded scheme. Trusting a proxy
+      # that is not actually in front means trusting a header a client can set.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    secrets:
+      - workspace_oidc_client_secret
+    # `/login` is the one route that must work for the Workspace to be useful,
+    # and it renders without a session — so it is the honest health check. A
+    # `/` that redirected would report healthy while login was broken.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request,sys;
+          sys.exit(0 if urllib.request.urlopen(
+          'http://127.0.0.1:8000/login', timeout=5).status == 200 else 1)"
+      interval: ${HEALTHCHECK_INTERVAL:-30s}
+      timeout: ${HEALTHCHECK_TIMEOUT:-10s}
+      retries: ${HEALTHCHECK_RETRIES:-3}
+      start_period: ${HEALTHCHECK_START_PERIOD:-20s}
+    # Defence in depth, not a substitute for the non-root user in the image.
+    security_opt:
+      - no-new-privileges:true
+    read_only: ${READ_ONLY_ROOTFS:-true}
+    tmpfs:
+      - /tmp:size=${TMPFS_SIZE:-64m}
+    logging:
+      driver: ${LOG_DRIVER:-json-file}
+      options:
+        max-size: ${LOG_MAX_SIZE:-10m}
+        max-file: ${LOG_MAX_FILE:-3}
+
+secrets:
+  # Written by the deploy path from OpenBao and removed afterwards; the file is
+  # never committed and never lives in the repository. The runbook names the
+  # OpenBao path — this file names only where the container reads it.
+  workspace_oidc_client_secret:
+    file: ${WORKSPACE_OIDC_CLIENT_SECRET_PATH:-./.secrets/workspace_oidc_client_secret}
