@@ -29,6 +29,7 @@ Status at a glance:
 | B3 | pinned dependencies not published | **cleared** 2026-08-15 |
 | B4 | no remote, no lock, no CI evidence | **partly cleared** — remote and lock yes, results pending |
 | B5 | kernel `testing` extra declared and unused | cleared 2026-08-12 |
+| B6 | the OIDC protocol client is implemented here, not consumed | **open** — `dotmac-auth-oidc` is unpublished |
 
 One follow-up is OPEN and belongs to the kernel rather than to this repository:
 **session provenance** (`auth_sessions.external_identity_binding_id`). It is
@@ -228,6 +229,51 @@ Still open:
    exercises the built artifact — package data, `__file__`-relative paths, a
    dependency satisfied only by the dev group — and the class of failure it
    catches is invisible everywhere else.
+
+## B6 — The OIDC protocol client is implemented here, not consumed
+
+**Open, and it is a decision rather than a defect to fix quietly.**
+
+`dotmac-auth-oidc 0.1.0a1` exists. It is merged in `dotmac_starter_mt` (#168,
+`991213c`) with full CI, and it holds the same ceremony this repository now
+holds: PKCE verifier, nonce and return path server-side behind a random opaque
+state id, a mandatory atomic `StateStore`, PyJWT with the JWK retained through
+`decode`, HTTPS endpoints, and a transport that refuses redirects.
+
+**It is not published**, deliberately: it is absent from the starter's release
+allowlist because it "has no contract consumer and has not earned a pilot", and
+the recorded next step was *this* login slice. So the Workspace was to be its
+first consumer, and the package was waiting for the Workspace to prove it.
+
+That is a genuine circle, and this repository could not resolve it from inside:
+
+- pinning it is impossible — `poetry add --dry-run --source forgejo
+  dotmac-auth-oidc` answers *"Could not find a matching version"*;
+- relaxing a pin or adding a cross-repository path dependency is forbidden
+  (AGENTS.md §6), and B3 above is the record of what that costs when it is done
+  anyway;
+- and B2 could not be closed without an OIDC client of some kind.
+
+So `src/dotmac_workspace/identity/oidc.py` is a Workspace-local implementation
+of the relying-party half — discovery, PKCE S256, the token exchange, JWKS and
+ID-token verification — written to the same shape. **It is a duplicate of a
+capability the fleet already owns, and it should not survive.**
+
+The intended repair, and the order matters:
+
+1. This pilot is green, which is the condition the release lane was waiting
+   for. Publish `dotmac-auth-oidc`.
+2. A follow-up here replaces `identity/oidc.py` with the published package,
+   keeping `identity/state_store.py` (the Workspace's own atomic store, which
+   is what the package's `StateStore` contract expects a consumer to supply)
+   and everything else in `identity/` unchanged.
+3. Delete `identity/oidc.py` in the same change. Two implementations of a
+   protocol client is the state ADR-0006's extraction rule exists to prevent,
+   and the longer both exist the more likely one of them quietly diverges.
+
+Until step 3, the honest description of this repository is that it holds a
+temporary copy of a shared capability — recorded here rather than left for a
+reader to discover from a `pyproject.toml` that does not mention the package.
 
 ## B5 — The kernel `testing` extra was declared and unused
 

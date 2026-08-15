@@ -143,6 +143,14 @@ own lifecycle (who may add one, where its secret half lives under ADR-0009,
 what happens to bindings that name a deleted row) and deciding that from
 imagination produces a wire format somebody has to unpick in the field.
 
+**The protocol client here is temporary.** `dotmac-auth-oidc 0.1.0a1` already
+holds this ceremony and is merged in the starter — but it is deliberately
+unpublished, waiting for a pilot, and this login slice was to be that pilot. A
+pin cannot resolve, and relaxing one or adding a path dependency is forbidden
+(AGENTS.md §6), so `identity/oidc.py` is a Workspace-local implementation of a
+capability the fleet already owns. It should be replaced by the published
+package and deleted — see `docs/ADOPTION-BLOCKERS.md` § B6.
+
 ### Bootstrapping the first member
 
 Federated login refuses an unbound subject, and this assembly composes no
