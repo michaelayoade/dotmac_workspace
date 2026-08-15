@@ -66,10 +66,21 @@ def _rendered_pages() -> dict[str, str]:
 
 
 def _methods(path: str) -> set[str]:
-    for route in web.router.routes:
-        if getattr(route, "path", None) == path:
-            return set(getattr(route, "methods", set()))
-    raise AssertionError(f"no route mounted at {path}")
+    """Every method mounted at `path`, across ALL routes that answer it.
+
+    The union, not the first match: `GET /login` and `POST /login` are two
+    separate `APIRoute`s sharing a path, and a helper that returned the first
+    one it found would report `{"GET"}` for a surface that also answers POST.
+    """
+    found = {
+        method
+        for route in web.router.routes
+        if getattr(route, "path", None) == path
+        for method in getattr(route, "methods", set())
+    }
+    if not found:
+        raise AssertionError(f"no route mounted at {path}")
+    return found
 
 
 # ── 1. the routes ───────────────────────────────────────────────────────────
