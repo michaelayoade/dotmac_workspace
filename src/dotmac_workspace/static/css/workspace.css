@@ -1,0 +1,256 @@
+/* The Workspace's own presentation, expressed ENTIRELY in dotmac-ui tokens.
+ *
+ * ## Two namespaces, and the line between them
+ *
+ * `.dmui-*` belongs to `dotmac-ui`. Only components that package actually
+ * declares may ship under it — today that is `empty-state` and nothing else —
+ * so a `.dmui-table` invented here would be claiming a name the design system
+ * owns, and would collide the day the design system ships one.
+ *
+ * `.dmws-*` is this assembly's. Everything below is in it, and every value is a
+ * `var(--dmui-…)` reference. Not a stylistic preference: a raw colour or a
+ * hand-picked spacing here would be a second, private design system that stops
+ * matching the fleet the first time a token is retuned, and nothing would fail
+ * to tell us.
+ *
+ * ## No hex, no px for anything the tokens cover
+ *
+ * If a value below is not a token, it is because the design system has no token
+ * for it (table collapse behaviour, for instance, is structural rather than
+ * visual). Reach for a token first; if none fits, that is a gap to raise with
+ * `dotmac-ui`, not a licence to pick a value here.
+ *
+ * Theme-awareness comes for free: the tokens are redefined by the package under
+ * the viewer's colour scheme, so this file never mentions light or dark.
+ */
+
+.dmws-body {
+  margin: 0;
+  background: var(--dmui-surface-background);
+  color: var(--dmui-text-primary);
+  font-family: var(--dmui-font-body);
+  font-size: var(--dmui-font-size-base);
+}
+
+.dmws-main {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: var(--dmui-space-xl);
+  display: flex;
+  flex-direction: column;
+  gap: var(--dmui-space-lg);
+}
+
+.dmws-main h1 {
+  font-family: var(--dmui-font-display);
+  font-size: var(--dmui-font-size-2xl);
+  font-weight: var(--dmui-font-weight-semibold);
+  margin: 0;
+}
+
+.dmws-main h2 {
+  font-family: var(--dmui-font-display);
+  font-size: var(--dmui-font-size-lg);
+  font-weight: var(--dmui-font-weight-semibold);
+  margin: 0 0 var(--dmui-space-sm);
+}
+
+/* ── navigation ─────────────────────────────────────────────────────────── */
+
+.dmws-nav {
+  display: flex;
+  gap: var(--dmui-space-md);
+  padding-bottom: var(--dmui-space-sm);
+  border-bottom: 1px solid var(--dmui-border-subtle);
+}
+
+.dmws-nav a {
+  color: var(--dmui-text-secondary);
+  text-decoration: none;
+  font-weight: var(--dmui-font-weight-medium);
+  padding: var(--dmui-space-2xs) var(--dmui-space-xs);
+  border-radius: var(--dmui-radius-sm);
+}
+
+.dmws-nav a:hover {
+  color: var(--dmui-text-primary);
+  background: var(--dmui-surface-secondary);
+}
+
+.dmws-nav a:focus-visible,
+.dmws-main button:focus-visible,
+.dmws-main input:focus-visible,
+.dmws-main a:focus-visible {
+  outline: 2px solid var(--dmui-border-focus);
+  outline-offset: 2px;
+}
+
+/* ── tables ─────────────────────────────────────────────────────────────── */
+
+.dmws-members,
+.dmws-bindings {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--dmui-surface-primary);
+  border: 1px solid var(--dmui-border-subtle);
+  border-radius: var(--dmui-radius-md);
+  overflow: hidden;
+}
+
+.dmws-members th,
+.dmws-bindings th {
+  text-align: left;
+  font-size: var(--dmui-font-size-sm);
+  font-weight: var(--dmui-font-weight-semibold);
+  color: var(--dmui-text-secondary);
+  background: var(--dmui-surface-secondary);
+  padding: var(--dmui-space-sm);
+  border-bottom: 1px solid var(--dmui-border-default);
+}
+
+.dmws-members td,
+.dmws-bindings td {
+  padding: var(--dmui-space-sm);
+  border-bottom: 1px solid var(--dmui-border-subtle);
+  vertical-align: top;
+}
+
+.dmws-bindings code {
+  font-family: var(--dmui-font-mono);
+  font-size: var(--dmui-font-size-sm);
+  color: var(--dmui-text-secondary);
+}
+
+/* ── controls ───────────────────────────────────────────────────────────── */
+
+.dmws-main button {
+  font: inherit;
+  font-weight: var(--dmui-font-weight-medium);
+  padding: var(--dmui-space-2xs) var(--dmui-space-sm);
+  border-radius: var(--dmui-radius-sm);
+  border: 1px solid transparent;
+  background: var(--dmui-action-primary-default);
+  color: var(--dmui-action-primary-on);
+  cursor: pointer;
+}
+
+.dmws-main button:hover {
+  background: var(--dmui-action-primary-hover);
+}
+
+.dmws-main button:active {
+  background: var(--dmui-action-primary-pressed);
+}
+
+/* Revoking a role and disabling a binding are the two destructive acts on
+ * these screens, and both are irreversible from the member's point of view —
+ * disabling signs them out within the second. They read as destructive. */
+.dmws-revoke,
+.dmws-disable {
+  background: var(--dmui-action-destructive-default) !important;
+  color: var(--dmui-action-destructive-on) !important;
+}
+
+.dmws-revoke:hover,
+.dmws-disable:hover {
+  background: var(--dmui-action-destructive-hover) !important;
+}
+
+.dmws-main input {
+  font: inherit;
+  padding: var(--dmui-space-2xs) var(--dmui-space-xs);
+  border: 1px solid var(--dmui-border-default);
+  border-radius: var(--dmui-radius-sm);
+  background: var(--dmui-surface-primary);
+  color: var(--dmui-text-primary);
+}
+
+.dmws-add,
+.dmws-bind {
+  background: var(--dmui-surface-elevated);
+  border: 1px solid var(--dmui-border-subtle);
+  border-radius: var(--dmui-radius-md);
+  padding: var(--dmui-space-md);
+}
+
+.dmws-add > div,
+.dmws-bind > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--dmui-space-xs);
+  margin-bottom: var(--dmui-space-sm);
+}
+
+.dmws-add p,
+.dmws-bind p {
+  color: var(--dmui-text-muted);
+  font-size: var(--dmui-font-size-sm);
+  margin: var(--dmui-space-sm) 0 0;
+}
+
+/* ── notices ────────────────────────────────────────────────────────────── */
+
+/* A refusal must be read, not noticed. The status tokens carry the whole
+ * meaning, so severity is never conveyed by colour alone — the message states
+ * the reason and the element carries role="alert". */
+.dmws-notice {
+  padding: var(--dmui-space-sm) var(--dmui-space-md);
+  border-radius: var(--dmui-radius-sm);
+  border-left: 4px solid;
+  margin: 0;
+}
+
+.dmws-notice--error {
+  background: var(--dmui-status-negative-surface);
+  color: var(--dmui-status-negative-foreground);
+  border-left-color: var(--dmui-status-negative-indicator);
+}
+
+.dmws-notice--ok {
+  background: var(--dmui-status-positive-surface);
+  color: var(--dmui-status-positive-foreground);
+  border-left-color: var(--dmui-status-positive-indicator);
+}
+
+/* ── tiles (the launcher) ───────────────────────────────────────────────── */
+
+.dmws-tiles {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: var(--dmui-space-md);
+}
+
+.dmws-tile {
+  background: var(--dmui-surface-elevated);
+  border: 1px solid var(--dmui-border-subtle);
+  border-radius: var(--dmui-radius-md);
+  padding: var(--dmui-space-md);
+  box-shadow: var(--dmui-shadow-sm);
+}
+
+.dmws-tile__name {
+  font-family: var(--dmui-font-display);
+  font-size: var(--dmui-font-size-lg);
+  margin: 0 0 var(--dmui-space-3xs);
+}
+
+.dmws-tile__instance {
+  color: var(--dmui-text-muted);
+  font-size: var(--dmui-font-size-sm);
+  margin: 0;
+}
+
+.dmws-tile__stale {
+  color: var(--dmui-status-warning-foreground);
+  font-size: var(--dmui-font-size-sm);
+}
+
+.dmws-tile__link {
+  display: inline-block;
+  margin-top: var(--dmui-space-sm);
+  color: var(--dmui-action-accent-default);
+  font-weight: var(--dmui-font-weight-medium);
+}

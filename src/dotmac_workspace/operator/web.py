@@ -73,6 +73,30 @@ _E = html.escape
 _ROLE_VALS = json.dumps({"role_slug": service.ADMIN_ROLE_SLUG}).replace("'", "&#39;")
 
 
+def _empty_state(*, title: str, message: str) -> str:
+    """An empty state, in `dotmac-ui`'s declared classes.
+
+    `dotmac_ui.EMPTY_STATE` is the published component and its `classes` are
+    part of that published contract — these are those classes, not invented
+    ones, so the compiled stylesheet already styles them and hard rule 16 is
+    satisfied.
+
+    The component itself is a JINJA macro, and this assembly renders no
+    templates: its one shell is `page.py`. So the markup is emitted here rather
+    than imported. That is the honest tradeoff and it has a cost — a change to
+    the macro's internal structure would not reach this function. The moment
+    this plane grows a Jinja surface, the macro is the thing to call; until
+    then, using the declared classes beats inventing a `.dmws-empty` that
+    duplicates a component the design system already publishes.
+    """
+    return (
+        '<div class="dmui-empty-state">'
+        f'<p class="dmui-empty-state__title">{_E(title)}</p>'
+        f'<p class="dmui-empty-state__message">{_E(message)}</p>'
+        "</div>"
+    )
+
+
 def _shell(*, title: str, screen: str) -> str:
     """The page around a screen, with the nav and the sign-out control.
 
@@ -137,7 +161,13 @@ def _members_screen(rows: list[service.MemberRow], *, notice: str = "") -> str:
             f"</tr></thead><tbody>{body}</tbody></table>"
         )
     else:
-        table = "<p>This workspace has no members yet.</p>"
+        table = _empty_state(
+            title="No members yet",
+            message=(
+                "Add the first member below. They will not be able to sign in "
+                "until an external identity is bound to them."
+            ),
+        )
 
     add = (
         '<section class="dmws-add"><h2>Add a member</h2>'
@@ -193,7 +223,13 @@ def _identity_screen(
             f"</tr></thead><tbody>{body}</tbody></table>"
         )
     else:
-        table = "<p>No external identities are bound in this workspace.</p>"
+        table = _empty_state(
+            title="No identities bound",
+            message=(
+                "Nobody can sign in to this workspace yet. Bind a provider "
+                "subject to a member below."
+            ),
+        )
 
     bind = (
         '<section class="dmws-bind"><h2>Bind an external identity</h2>'

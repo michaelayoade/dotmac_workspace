@@ -29,9 +29,24 @@ from __future__ import annotations
 import html
 from typing import Final
 
+import dotmac_ui
+
 #: Kernel-packaged, served from the `/static` mount `create_app` installs.
 _HTMX: Final[str] = "/static/js/htmx.min.js"
 _CSRF_BRIDGE: Final[str] = "/static/js/csrf.js"
+
+#: This assembly's own small stylesheet, served from the same mount via
+#: `ProductAssemblySpec.assembly_static_dir`. It defines the `.dmws-*` classes
+#: this plane's markup uses and defines them ENTIRELY in terms of
+#: `var(--dmui-*)` tokens — see `static/css/workspace.css`. Two rules make that
+#: distinction load-bearing rather than stylistic:
+#:
+#: * `.dmui-*` is a RESERVED namespace. Only components `dotmac-ui` actually
+#:   declares may ship under it (today: `empty-state`), so inventing
+#:   `.dmui-table` here would be claiming a name the design system owns.
+#: * A raw colour here would be a second, private design system that silently
+#:   stops matching the fleet the first time a token is retuned.
+_WORKSPACE_CSS: Final[str] = "/static/css/workspace.css"
 
 
 def render_page(*, title: str, body: str) -> str:
@@ -49,10 +64,12 @@ def render_page(*, title: str, body: str) -> str:
         '<html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{html.escape(title)} — DotMac Workspace</title>"
+        f'<link rel="stylesheet" href="{dotmac_ui.stylesheet_url()}">'
+        f'<link rel="stylesheet" href="{_WORKSPACE_CSS}">'
         f'<script src="{_HTMX}" defer></script>'
         f'<script src="{_CSRF_BRIDGE}" defer></script>'
         "</head>"
-        f"<body><main>{body}</main></body></html>"
+        f'<body class="dmws-body"><main class="dmws-main">{body}</main></body></html>'
     )
 
 

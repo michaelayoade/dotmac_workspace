@@ -427,6 +427,23 @@ url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
 reference = "forgejo"
 
 [[package]]
+name = "dotmac-ui"
+version = "0.1.0a7"
+description = "DotMac shared UI design system — semantic design tokens and compiled, self-hosted, CSP-compatible assets (ADR-0006 U1)"
+optional = false
+python-versions = ">=3.11,<3.14"
+groups = ["main"]
+files = [
+    {file = "dotmac_ui-0.1.0a7-py3-none-any.whl", hash = "sha256:2e04f52c00703a337bb959e8d54e0d3fc63b30ea904914b8926ff6c9bafe716e"},
+    {file = "dotmac_ui-0.1.0a7.tar.gz", hash = "sha256:19f9b2ceea309078349a81bdd6b55e10ef6651d11e5ff0ba24c0ec0018cde5d5"},
+]
+
+[package.source]
+type = "legacy"
+url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
+reference = "forgejo"
+
+[[package]]
 name = "email-validator"
 version = "2.3.0"
 description = "A robust email address syntax and deliverability validation library."
@@ -2076,4 +2093,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.14"
-content-hash = "bac37b875ab093b9c7255b7465067bc07896c7d4374625e0c2fe4b80c143d819"
+content-hash = "1eab89cb3a0d939f124efe0bceaaa8598a7dac254e69886e9b4083f87255dd80"

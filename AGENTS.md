@@ -137,6 +137,30 @@ The `from-wheel` CI job exists partly to make that failure loud: it installs the
 built wheel into a clean virtualenv and resolves its pins from the index, so a
 version that is only written down fails there rather than in production.
 
+## 6a. Compose the ecosystem packages; never hand-roll what one owns
+
+Fleet-wide standing rule. Before building anything, ask which published Dotmac
+package already owns it — `dotmac-ui` (tokens, stylesheet, components, the
+accessibility contract), `dotmac-kernel` (app factory, auth, RLS, migrations,
+permissions, settings, idempotency), `dotmac-auth-oidc` (the relying party),
+`dotmac-application-directory` (the portfolio) — and compose it through its
+**published surface**, exact-pinned. Never copy a file, monkey-patch, or fork
+(ADR-0006's extraction rule). If a package nearly fits, improve it or add a
+declared extension point; a local reimplementation is how a product falls
+behind a security fix in the thing it copied.
+
+This is not tidiness. This assembly served **every screen unstyled** through
+the entire pilot: the spec's `packaged_static_dirs` and `assembly_static_dir`
+slots were simply never filled, nothing failed, and no test noticed. That is
+the shape of the defect — not a crash, but a product quietly ceasing to be
+part of the fleet.
+
+Namespaces are part of the contract. `.dmui-*` belongs to `dotmac-ui` and only
+classes it declares may ship; this assembly's own markup uses `.dmws-*`.
+Author against `var(--dmui-<role>)`, never a raw hex, so a retuned token
+reaches every surface at once. `tests/test_design_system.py` enforces both,
+each with a sensitivity proof.
+
 ## 7. Everything by config
 
 Every environment-specific value is an overridable knob with a documented
