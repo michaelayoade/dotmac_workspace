@@ -19,6 +19,7 @@
 | a ceremony is used at most once, on any worker | `DELETE … RETURNING` |
 | an unbound subject cannot log in | `finalize_external_login` returning `None` |
 | a disable cannot race a login | `finalize_external_login`'s row lock |
+| a disable RETRACTS sessions already issued | kernel a67 provenance + revocation |
 | the session cannot outrun the decision | one transaction, one commit |
 
 ## `finalize_external_login`, never `resolve_external_identity`
@@ -52,10 +53,12 @@ inactive when the login took the lock. `tests/test_login_flow.py
 `tests/test_no_resolve_then_issue.py` proves by AST that the racy pair does not
 appear anywhere in this repository.
 
-What the lock does NOT close is named rather than implied: a session issued a
-minute earlier is untouched, because retracting it needs session provenance and
-that column lives on a kernel table (see `session.py` and
-`docs/ADOPTION-BLOCKERS.md`).
+What the lock alone does not close, kernel a67 does. A session issued a minute
+earlier used to be untouched by a later disable; now `session.issue` stamps
+`external_identity_binding_id` and `disable_external_identity_binding` revokes
+on it, in the kernel, under the same row lock. So both interleavings end with no
+live session derived from a disabled binding: the login that loses is refused,
+and the login that wins is revoked a moment later.
 
 ## No JIT provisioning, no email linking
 
@@ -330,7 +333,13 @@ def complete_login(
         )
         raise LoginRefused
 
-    auth_session, token = session.issue(db, tenant=tenant, party=identity.party)
+    # `identity.binding_id` — the FINALIZER's answer, not a value this function
+    # had in hand. The two can differ when a subject resolves to a different
+    # binding than the caller assumed, and the column must record which binding
+    # actually authorised the login.
+    auth_session, token = session.issue(
+        db, tenant=tenant, party=identity.party, binding_id=identity.binding_id
+    )
 
     write_audit_event(
         db,
