@@ -15,6 +15,7 @@ Hard rules 16 and 17, checked here rather than assumed.
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -39,6 +40,44 @@ def _declarations(text: str) -> list[str]:
         m.group(2).strip()
         for m in re.finditer(r"([\w-]+)\s*:\s*([^;{}]+);", without_comments)
     ]
+
+
+def _dmui_names_actually_shipped() -> set[str]:
+    """Every `dmui-*` name this assembly really emits or styles.
+
+    Structure, not text. The first version of this guard grepped both file
+    types and failed on its OWN prose: `workspace.css`'s header comment
+    explains that inventing a `.dmui-table` would be claiming a name the design
+    system owns, and a text scan read that explanation as a usage. The cheapest
+    way to satisfy such a guard is to delete the reasoning, which is precisely
+    the wrong repair — so the detector parses instead.
+
+    * Python: the AST's string constants, with docstrings excluded. Comments
+      are not in the AST at all, so they cannot be misread.
+    * CSS: comments stripped, then class selectors only. Token references are
+      `--dmui-*` and are excluded by requiring a `.` before the name.
+    """
+    src = Path(page.__file__).resolve().parent
+    found: set[str] = set()
+
+    for path in src.rglob("*.py"):
+        tree = ast.parse(path.read_text())
+        docstrings = {
+            ast.get_docstring(node, clean=False)
+            for node in ast.walk(tree)
+            if isinstance(
+                node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+            )
+        }
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if node.value in docstrings:
+                    continue
+                found |= set(re.findall(r"\bdmui-[a-z0-9_-]+", node.value))
+
+    css = re.sub(r"/\*.*?\*/", "", CSS.read_text(), flags=re.S)
+    found |= {name.lstrip(".") for name in re.findall(r"\.dmui-[a-z0-9_-]+", css)}
+    return found
 
 
 def test_the_workspace_stylesheet_exists_and_is_served() -> None:
@@ -96,20 +135,7 @@ def test_no_undeclared_dmui_class_is_used_anywhere() -> None:
     assembly styles itself lives under `.dmws-*`.
     """
     published = {cls for component in dotmac_ui.COMPONENTS for cls in component.classes}
-
-    used: set[str] = set()
-    src = Path(page.__file__).resolve().parent
-    for path in [*src.rglob("*.py"), CSS]:
-        used |= set(re.findall(r"\bdmui-[a-z0-9_-]+", path.read_text()))
-
-    # Token references are `--dmui-*` and are matched by the pattern above once
-    # the leading dashes are consumed; they are not classes.
-    tokens = {
-        name.lstrip("-")
-        for path in [CSS]
-        for name in re.findall(r"--dmui-[a-z0-9-]+", path.read_text())
-    }
-    invented = used - published - tokens
+    invented = _dmui_names_actually_shipped() - published
     assert not invented, (
         f"undeclared .dmui-* names used: {sorted(invented)}. That namespace "
         "belongs to dotmac-ui; use .dmws-* for this assembly's own markup."
@@ -124,3 +150,39 @@ def test_the_empty_state_uses_the_published_component_classes() -> None:
     assert "dmui-empty-state" in rendered
     emitted = set(re.findall(r"\bdmui-[a-z0-9_-]+", rendered))
     assert emitted <= dotmac_ui.EMPTY_STATE.classes
+
+
+def test_the_namespace_guard_still_bites() -> None:
+    """Sensitivity proof, and this one has already earned its keep.
+
+    The guard's first version fired on a comment rather than on shipped markup.
+    Now that it parses, the risk inverts: an AST walk that quietly matched
+    nothing would pass forever. So feed it an invented class in a real string
+    constant and require that it is seen — and confirm that the same name in a
+    docstring and in a CSS comment is NOT, which is the discrimination the
+    whole rewrite exists to make.
+    """
+    module = ast.parse('X = "<table class=\\"dmui-invented\\">"')
+    shipped: set[str] = set()
+    docstrings = {ast.get_docstring(module, clean=False)}
+    for node in ast.walk(module):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if node.value in docstrings:
+                continue
+            shipped |= set(re.findall(r"\bdmui-[a-z0-9_-]+", node.value))
+    assert "dmui-invented" in shipped, "the detector cannot see a shipped class"
+
+    prose = ast.parse('"""Never invent a dmui-invented class."""')
+    prose_docstrings = {ast.get_docstring(prose, clean=False)}
+    prose_found: set[str] = set()
+    for node in ast.walk(prose):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if node.value in prose_docstrings:
+                continue
+            prose_found |= set(re.findall(r"\bdmui-[a-z0-9_-]+", node.value))
+    assert not prose_found, "the detector still reads its own documentation"
+
+    css = re.sub(r"/\*.*?\*/", "", "/* never write .dmui-invented */", flags=re.S)
+    assert not re.findall(
+        r"\.dmui-[a-z0-9_-]+", css
+    ), "the detector still reads CSS comments"
