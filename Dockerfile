@@ -39,7 +39,12 @@ RUN pip install "poetry==${POETRY_VERSION}"
 WORKDIR /app
 
 # Dependency manifests first, so a source-only change reuses the resolved layer.
-COPY pyproject.toml poetry.lock ./
+# README.md comes along because `pyproject.toml` declares `readme = "README.md"`.
+# Without it poetry cannot build the project metadata and the root install
+# becomes a silent no-op: the image ships every dependency and NOT the
+# application, with `ModuleNotFoundError` from a running container as the only
+# symptom. Found on the first real deployment.
+COPY pyproject.toml poetry.lock README.md ./
 
 # `--only main` drops the dev group: pytest, ruff, mypy and the pyjwt the TESTS
 # use to mint ID tokens have no business in a production image. The runtime gets
@@ -48,14 +53,16 @@ COPY pyproject.toml poetry.lock ./
 # `--no-root` because the project itself is installed after the source is
 # copied; installing it here would bake a stale copy into the dependency layer.
 RUN --mount=type=secret,id=forgejo_netrc,target=/root/.netrc,mode=0400 \
-    poetry install --only main --no-root
+    poetry install --without dev --no-root
 
 COPY src/ ./src/
 COPY alembic/ ./alembic/
 COPY alembic.ini ./
 
 RUN --mount=type=secret,id=forgejo_netrc,target=/root/.netrc,mode=0400 \
-    poetry install --only main
+    poetry install --without dev \
+ && /app/.venv/bin/python -c "import dotmac_workspace" \
+ && echo "the application is importable from the venv"
 
 # ── runtime ─────────────────────────────────────────────────────────────────
 FROM python:${PYTHON_VERSION}-slim AS runtime
@@ -66,6 +73,7 @@ RUN groupadd --system --gid 10001 workspace \
     && useradd --system --uid 10001 --gid workspace --no-create-home workspace
 
 ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH=/app/src \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
@@ -80,6 +88,12 @@ COPY --from=build --chown=root:root /app/alembic.ini /app/alembic.ini
 # rewrite it. A compromised request handler that can patch the app on disk turns
 # one bug into persistence.
 USER workspace
+
+# The check that would have caught an image shipping without its application.
+# At BUILD time, so a broken image is never tagged — as opposed to never
+# starting, which is what a healthcheck gives you after the fact.
+RUN python -c "import dotmac_workspace, dotmac_kernel, dotmac_auth_oidc; \
+print('runtime imports ok:', dotmac_workspace.__name__)"
 
 # Every value overridable, with a documented default (AGENTS.md § everything by
 # config). PORT is the only one the image itself needs.

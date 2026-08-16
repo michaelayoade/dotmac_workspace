@@ -100,4 +100,8 @@ secrets:
   # never committed and never lives in the repository. The runbook names the
   # OpenBao path — this file names only where the container reads it.
   workspace_oidc_client_secret:
+    # The file must be readable by uid 10001 — the image's `workspace` user.
+    # A root-owned 600 file mounts through unreadable and the app dies at
+    # startup with PermissionError. `chown 10001:10001`, NOT `chmod 644`:
+    # world-readable on the host to satisfy a container is the wrong trade.
     file: ${WORKSPACE_OIDC_CLIENT_SECRET_PATH:-./.secrets/workspace_oidc_client_secret}
