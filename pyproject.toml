@@ -86,6 +86,12 @@ dotmac-auth-oidc = { version = "0.1.0a1", source = "forgejo" }
 # and only declared components ship (ADR-0006 §5, hard rules 16 and 17). This
 # assembly's own markup uses its own `.dmws-*` namespace.
 dotmac-ui = { version = "0.1.0a7", source = "forgejo" }
+# Starlette's `request.form()` asserts on this being installed — for
+# urlencoded bodies too, not only multipart. Every mutating operator control is
+# an `hx-post` carrying a urlencoded body, so without it each one 500s. It is a
+# real dependency of the surface rather than an optional extra, and is declared
+# as one.
+python-multipart = "^0.0.9"
 uvicorn = { extras = ["standard"], version = "^0.30" }
 # The one Workspace database's driver. Separate from every application's
 # database by ADR-0021 §1 — there is no product DSN here and no cross-database
