@@ -37,7 +37,10 @@ and cannot allocate access, and that gap is honest rather than papered over.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import dotmac_application_directory
+import dotmac_ui
 from dotmac_kernel.assembly import ProductAssemblySpec
 
 from dotmac_workspace.identity.config import configuration_errors
@@ -47,6 +50,12 @@ from dotmac_workspace.launcher.feature import feature as launcher_feature
 from dotmac_workspace.operator.feature import feature as operator_feature
 
 ASSEMBLY_NAME = "dotmac_workspace"
+
+#: Where this assembly's own static assets live, resolved from the package
+#: rather than the working directory — the app runs from `/app` in a container
+#: and from a checkout in development, and a relative path would work in
+#: exactly one of them.
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 def build_spec() -> ProductAssemblySpec:
@@ -85,6 +94,23 @@ def build_spec() -> ProductAssemblySpec:
             dotmac_application_directory.module,
         ),
         web_enabled=True,
+        # The design system's compiled assets, layered into the existing
+        # `/static` mount. The kernel never imports `dotmac_ui` — the assembly
+        # fills this slot, which is what keeps the dependency direction one-way.
+        #
+        # The spec's sibling `stylesheets` slot is deliberately NOT set here.
+        # It installs a Jinja global, and this assembly renders no templates:
+        # its one HTML shell is `page.py`, which emits the `<link>` itself from
+        # the same `dotmac_ui.stylesheet_url()`. Declaring config that nothing
+        # in this composition reads would be inert vocabulary — it would look
+        # like the styling was wired when the actual wiring lived elsewhere,
+        # which is the state a reader most needs not to be lied to about.
+        packaged_static_dirs=(dotmac_ui.static_dir(),),
+        # This assembly's own `.dmws-*` rules, written entirely against
+        # `var(--dmui-*)` tokens. Separate from the package's assets because the
+        # design system ships tokens and declared components; the markup that
+        # consumes them is the product's.
+        assembly_static_dir=_STATIC_DIR,
         startup_checks=(configuration_errors,),
         startup_hooks=(install_workspace_secrets,),
     )
