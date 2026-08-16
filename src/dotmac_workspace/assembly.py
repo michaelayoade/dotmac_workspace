@@ -21,6 +21,9 @@ config validation, and never armed.
 - `launcher.feature` — the UI facet. Per ADR-0021 the portal is the assembly's
   facet rather than a domain module, which is why the directory ships no
   routers and this feature exists here.
+- `operator.feature` — the administration facet: members, roles and identity
+  bindings. Same reasoning as the launcher, and the reason the CLI is now a
+  recovery path rather than the only way to administer a running deployment.
 
 ## What it deliberately does not compose
 
@@ -41,6 +44,7 @@ from dotmac_workspace.identity.config import configuration_errors
 from dotmac_workspace.identity.feature import feature as identity_feature
 from dotmac_workspace.identity.secret_bootstrap import install_workspace_secrets
 from dotmac_workspace.launcher.feature import feature as launcher_feature
+from dotmac_workspace.operator.feature import feature as operator_feature
 
 ASSEMBLY_NAME = "dotmac_workspace"
 
@@ -77,6 +81,7 @@ def build_spec() -> ProductAssemblySpec:
         modules=(
             identity_feature,
             launcher_feature,
+            operator_feature,
             dotmac_application_directory.module,
         ),
         web_enabled=True,

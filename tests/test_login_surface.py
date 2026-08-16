@@ -23,6 +23,7 @@ from dotmac_workspace.identity import config, session, web
 from dotmac_workspace.identity.config import ProviderConfig
 from dotmac_workspace.identity.feature import feature
 from dotmac_workspace.launcher import web as launcher_web
+from dotmac_workspace.operator import web as operator_web
 from dotmac_workspace.session_contract import (
     CALLBACK_PATH,
     LOGIN_PATH,
@@ -61,6 +62,20 @@ def _rendered_pages() -> dict[str, str]:
             "login": web.login_page(tenant=object(), next_path="").body.decode(),
             "refusal": web._refusal("no", status_code=403).body.decode(),
             "launcher": launcher_web._page("<p>none</p>"),
+            # The operator screens are covered HERE rather than in a suite of
+            # their own. These guards are a governance scope, and a scope that
+            # is not extended in the same change that adds a surface is a scope
+            # that silently stops covering the product — the exact drift the
+            # starter's CLAUDE.md calls out. Both screens carry input controls,
+            # which is precisely where a bare form would otherwise appear.
+            "operator_members": operator_web._shell(
+                title="Members",
+                screen=operator_web._members_screen([]),
+            ),
+            "operator_identity": operator_web._shell(
+                title="Identity",
+                screen=operator_web._identity_screen([], issuer="https://idp"),
+            ),
         }
     finally:
         config.install(None)
@@ -285,7 +300,10 @@ def test_every_callback_outcome_clears_the_state_cookie() -> None:
 # ── 3. no mutation on a GET, no bare form ───────────────────────────────────
 
 
-@pytest.mark.parametrize("name", ["login", "refusal", "launcher"])
+@pytest.mark.parametrize(
+    "name",
+    ["login", "refusal", "launcher", "operator_members", "operator_identity"],
+)
 def test_no_rendered_page_contains_a_bare_method_post_form(name: str) -> None:
     """`static/js/csrf.js` attaches `X-CSRF-Token` to htmx requests. A native
     form submit has no hook for a custom header, so a bare `method="post"` form
@@ -313,7 +331,9 @@ def test_the_bare_form_guard_does_not_fire_on_prose_forbidding_one() -> None:
         assert 'method="post"' not in html.lower()
 
 
-@pytest.mark.parametrize("name", ["login", "launcher"])
+@pytest.mark.parametrize(
+    "name", ["login", "launcher", "operator_members", "operator_identity"]
+)
 def test_every_mutating_control_is_an_hx_post(name: str) -> None:
     """The positive half: the controls that exist DO use the bridge.
 
@@ -323,7 +343,10 @@ def test_every_mutating_control_is_an_hx_post(name: str) -> None:
     assert "hx-post=" in _rendered_pages()[name]
 
 
-@pytest.mark.parametrize("name", ["login", "refusal", "launcher"])
+@pytest.mark.parametrize(
+    "name",
+    ["login", "refusal", "launcher", "operator_members", "operator_identity"],
+)
 def test_every_page_loads_the_csrf_header_bridge(name: str) -> None:
     """The bridge is what makes an `hx-post` succeed. A page that shipped the
     control without the script would render a button that silently 403s."""
