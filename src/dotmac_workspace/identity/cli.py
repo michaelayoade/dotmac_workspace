@@ -152,11 +152,19 @@ def _disable(args: argparse.Namespace) -> int:
         except (NotFoundError, ValueError) as exc:
             print(f"refused: {exc}", file=sys.stderr)
             return 2
+        # This message told the operator the opposite of what had just
+        # happened. It was written before kernel a67 and said sessions already
+        # issued "stay valid until it expires" — during the first real pilot a
+        # signed-in member was cut off mid-session while this line claimed they
+        # would not be. An operator trusting it would have gone looking for
+        # another lever to pull, or worse, assumed the member still had access.
         print(
-            f"disabled binding {binding.id}. No FURTHER session can be derived "
-            "from it. Any session ALREADY issued from it stays valid until it "
-            "expires — selective revocation needs session provenance on the "
-            "kernel's auth_sessions table (see docs/ADOPTION-BLOCKERS.md)."
+            f"disabled binding {binding.id}. No further session can be derived "
+            "from it, AND every session already issued from it has been "
+            "revoked — the member is signed out now, not when their token "
+            "expires. Both happen in one transaction under the binding's row "
+            "lock, so a login racing this either loses and is refused, or wins "
+            "and is revoked a moment later (kernel a67)."
         )
     return 0
 
