@@ -239,13 +239,31 @@ def test_disabling_a_binding_reaches_the_service(
     assert seen == {"binding_id": binding_id}
 
 
-def test_every_mutating_route_answers_a_urlencoded_body(client: TestClient) -> None:
+def test_every_mutating_route_answers_a_urlencoded_body(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The sweep, so a NEW mutating route cannot repeat this failure quietly.
 
     Each route is driven with an empty urlencoded body. What is asserted is
     only that the request was parsed and handled — never a 500, which is what a
     body the application cannot read produces.
+
+    The domain calls are stubbed because this is a TRANSPORT check: with the
+    real service and a stub session it would fail on `db.scalars`, which is a
+    true statement about the fake database and says nothing about whether the
+    request body was readable. Keeping the two apart is what lets a failure
+    here mean exactly one thing.
     """
+    for name in ("add_member", "revoke_role", "bind_member", "disable_binding_for"):
+        monkeypatch.setattr(service, name, lambda *a, **k: SimpleNamespace(id=uuid4()))
+    monkeypatch.setattr(
+        web,
+        "provider_or_none",
+        lambda: SimpleNamespace(
+            issuer="https://idp.example.net", provider_binding="primary"
+        ),
+    )
+
     for path in (
         web.MEMBERS_PATH,
         f"{web.MEMBERS_PATH}/{uuid4()}/revoke",
