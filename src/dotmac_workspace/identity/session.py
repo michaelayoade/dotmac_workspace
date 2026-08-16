@@ -23,27 +23,36 @@ docstring for the interleaving. Nothing here commits; `dotmac_kernel.db` owns
 the transaction (hard rule 8), and its commit is what releases the lock and
 makes the stamp and the session visible together.
 
-## Session provenance: recorded in the audit trail, NOT in a local column
+## Session provenance: STAMPED, as of kernel a67
 
-The kernel's deferred contract puts `external_identity_binding_id` on
-`auth_sessions` — a KERNEL table — so that disabling a binding can revoke
-exactly the sessions it produced. This assembly does not add that column, and
-adding a Workspace-owned shadow table instead would be worse than waiting: it
-would make this plane a second writer of session revocation, in a different
-transaction from the kernel's `disable_external_identity_binding`, which is
-precisely the "two calls a caller can do half of" that the contract forbids.
+`auth_sessions.external_identity_binding_id` exists in the kernel now, and this
+assembly writes it. `issue` REQUIRES `binding_id` — it is not optional and there
+is no password path through this module — because contract point 2 says the
+value `finalize_external_login` returned is the column's only legitimate source.
+A session minted from that call without the stamp is unattributable, and the
+kernel cannot enforce that rule since it does not mint sessions.
 
-What this assembly does instead is the use the kernel names as legitimate
-today: `binding_id` is recorded in the login audit event's details, so the
-provenance exists in the trail even though it cannot yet be enforced by a
-revocation. The consequence is stated rather than hidden — disabling a binding
-stops FURTHER logins immediately and leaves any session already issued from it
-alive until it expires. See `docs/ADOPTION-BLOCKERS.md`.
+Waiting for the column was the right call. A Workspace-owned shadow table would
+have made this plane a second writer of session revocation, in a different
+transaction from the kernel's `disable_external_identity_binding` — precisely
+the "two calls a caller can do half of" the contract forbids. The pin moved
+instead.
+
+What the stamp buys: disabling a binding now revokes the sessions it produced,
+in the kernel, under the same row lock. It is no longer true that a session
+outlives the identity it came from.
+
+`binding_id` is ALSO still recorded in the login audit event's details, and that
+is not redundant. The column is current state — it says which binding a live
+session came from, and disappears with the row. The audit event is history: it
+says a session was issued from that binding at a moment in time, and survives
+the session being revoked and the row being cleaned up.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from uuid import UUID
 
 from dotmac_kernel.models import AuthSession, Party, Tenant
 from dotmac_kernel.security import hash_token, issue_access_token
@@ -58,16 +67,25 @@ from dotmac_workspace.session_contract import (
 )
 
 
-def issue(db: Session, *, tenant: Tenant, party: Party) -> tuple[AuthSession, str]:
+def issue(
+    db: Session, *, tenant: Tenant, party: Party, binding_id: UUID
+) -> tuple[AuthSession, str]:
     """Add a Workspace session for `party`. Returns the row and its token.
+
+    `binding_id` is REQUIRED and has no default. Every session this assembly
+    issues comes from a federated login — there is no password path here — so a
+    default would exist only to let a caller forget, and the thing they would be
+    forgetting is what makes selective revocation possible. It must be the id
+    `finalize_external_login` returned, not one the caller had in hand:
+    contract point 2, and the difference matters when a subject resolves to a
+    different binding than the caller expected.
 
     Flushes, never commits: the caller's transaction is what makes this and the
     binding stamp visible together, or neither. Only the HASH is stored — the
     token itself exists in the response and in the browser, and nowhere else.
 
     The row is returned rather than just the token so the caller can record
-    WHICH session it issued in the audit trail. That id is the other half of
-    the provenance the kernel's deferred column will one day enforce.
+    WHICH session it issued in the audit trail.
     """
     token, expires_at = issue_access_token(party.id, tenant.id)
     auth_session = AuthSession(
@@ -75,6 +93,7 @@ def issue(db: Session, *, tenant: Tenant, party: Party) -> tuple[AuthSession, st
         party_id=party.id,
         token_hash=hash_token(token),
         expires_at=expires_at,
+        external_identity_binding_id=binding_id,
     )
     db.add(auth_session)
     db.flush()

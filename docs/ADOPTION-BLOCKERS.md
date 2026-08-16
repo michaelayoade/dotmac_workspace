@@ -31,10 +31,10 @@ Status at a glance:
 | B5 | kernel `testing` extra declared and unused | cleared 2026-08-12 |
 | B6 | the OIDC protocol client is implemented here, not consumed | **cleared 2026-08-15** — `dotmac-auth-oidc 0.1.0a1` published, pinned, local copy deleted |
 
-One follow-up is OPEN and belongs to the kernel rather than to this repository:
-**session provenance** (`auth_sessions.external_identity_binding_id`). It is
-recorded under B2 below rather than as a new blocker, because it does not stop
-this Workspace running — it bounds what disabling a binding can do.
+That follow-up is now CLOSED. **Session provenance**
+(`auth_sessions.external_identity_binding_id`) shipped in kernel `0.1.0a67`,
+this assembly pins it exactly and stamps the column when it issues a session,
+and disabling a binding revokes the sessions it produced. See B2 below.
 
 ## B1 — There is no cookie-compatible permission seam in the kernel
 
@@ -124,32 +124,47 @@ Six properties hold it up, and each is enforced somewhere:
    unbound subject is refused. `dotmac-workspace bind` is how an operator
    creates one, with `bound_by` and `reason` required.
 
-### The follow-up this repository could NOT do: session provenance
+### The follow-up this repository could not do — done in kernel a67
 
-The kernel's `external_identity` docstring describes a deferred contract:
-`auth_sessions.external_identity_binding_id`, so that disabling a binding can
+The kernel's `external_identity` docstring carried a deferred contract:
+`auth_sessions.external_identity_binding_id`, so that disabling a binding could
 SELECTIVELY revoke the sessions derived from it — never a global logout.
 
-**That column lives on a KERNEL table** (`public.auth_sessions`,
-`dotmac_kernel/models.py`, kernel migration lineage). Adding it needs a kernel
-migration, a new kernel revocation operation taking the same row lock as
-`disable_external_identity_binding`, and an issuance path that stamps it. This
-repository does not modify the kernel, so **it is reported rather than
-implemented, and it is a kernel `0.1.0a65`.**
+**That column lives on a KERNEL table** (`public.auth_sessions`), so this
+repository could not add it. It was reported rather than implemented, and the
+report named the release it was owed from. It shipped in `0.1.0a67`, and this
+assembly adopted it in the same week:
 
-What was done Workspace-side instead is the use the kernel names as legitimate
-today: `binding_id` is recorded in the `workspace.login.succeeded` audit event's
-details, so the provenance exists in the trail. What was deliberately NOT done
-is a Workspace-owned shadow table. It would have looked like progress and would
-have made this plane a second writer of session revocation, in a different
-transaction from the kernel's disable — precisely the "two calls a caller can do
-half of" that the kernel contract forbids, and a migration off a parallel
-authority when a65 lands.
+- the kernel pin moves to `0.1.0a67` exactly;
+- `session.issue` REQUIRES `binding_id` — no default, because every session here
+  comes from a federated login and a default would exist only to let a caller
+  forget the thing that makes revocation possible;
+- the value passed is `identity.binding_id`, the FINALIZER's answer, not a value
+  the caller had in hand. The two differ when a subject resolves to a different
+  binding than expected, and the column must record which binding actually
+  authorised the login (kernel contract point 2);
+- `tests/db/test_session_revoked_on_binding_disable.py` proves the consequence
+  through this assembly's own code path: login, disable, and the session is then
+  refused by `authenticate_request` — the same validator that guards every page.
 
-**The consequence, stated plainly:** disabling a binding stops any FURTHER
-session being derived from it immediately (the two calls take the same row
-lock). A session ALREADY issued from that binding stays valid until it expires.
-`dotmac-workspace disable` prints this rather than implying otherwise.
+What was deliberately NOT done while waiting, and would have looked like
+progress: a Workspace-owned shadow table. It would have made this plane a second
+writer of session revocation, in a different transaction from the kernel's
+disable — precisely the "two calls a caller can do half of" the kernel contract
+forbids, and then a migration off a parallel authority when a67 landed. Waiting
+cost nothing and the pin moved instead.
+
+`binding_id` is still recorded in the `workspace.login.succeeded` audit event,
+and that is not redundant with the column. The column is current state: which
+binding a LIVE session came from, gone when the row goes. The audit event is
+history: that a session was issued from that binding at a moment in time, and it
+survives both the revocation and the row.
+
+**The consequence, restated:** disabling a binding now stops any further session
+being derived from it AND revokes the ones already issued, in one kernel call,
+under one row lock. It is no longer true that a session outlives the identity it
+came from.
+
 
 ## B3 — The pinned dependencies are not published
 

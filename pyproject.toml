@@ -30,7 +30,18 @@ python = ">=3.12,<3.14"
 # it, with both audit trails looking correct. This assembly could not close B2
 # on a63 without reproducing that window, so the pin moves rather than the code
 # working around it.
-dotmac-kernel = { version = "0.1.0a64", source = "forgejo" }
+#
+# a67 (2026-08-16) closes the provenance half. `auth_sessions` carries
+# `external_identity_binding_id`, and `disable_external_identity_binding`
+# revokes the sessions a binding produced — in one transaction, under the same
+# row lock, with no opt-out. This assembly stamps that column when it issues a
+# session, which is contract point 2: the binding id the FINALIZER returned is
+# the column's only legitimate source.
+#
+# The pin moves rather than the code working around it, for the same reason it
+# moved to a64: a shadow column here would make this plane a second writer of
+# session revocation, in a different transaction from the kernel's disable.
+dotmac-kernel = { version = "0.1.0a67", source = "forgejo" }
 # The tenant's connected-application portfolio, and the permanent owner of the
 # `ApplicationDescriptor` contract (ADR-0021 §4). This assembly is its INTENDED
 # first consumer and is not yet one: nothing here is deployed, so the module's
