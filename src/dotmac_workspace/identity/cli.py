@@ -1,8 +1,31 @@
-"""`dotmac-workspace` — the operator's way in, before anyone can log in.
+"""`dotmac-workspace` — bootstrap and recovery, not day-to-day administration.
 
 A thin argparse adapter over `bootstrap.py` (AGENTS.md §5): it parses, opens a
 tenant-scoped session through the kernel, delegates, and prints. It contains no
 query and makes no decision.
+
+## This is the recovery path. The supported path is the browser.
+
+`operator/web.py` serves Members and Identity screens, and routine work belongs
+there: it authorizes each act against a declared permission, records the acting
+operator as the binding evidence rather than trusting a typed `--by`, and
+refuses the changes that would lock the tenant out.
+
+This command does none of that, and deliberately so. It reaches the database
+directly, it accepts whatever `--by` it is given, and it will happily strand a
+tenant. Those are the properties you want from a recovery tool and exactly the
+properties you do not want from an everyday one. Reach for it in three cases:
+
+1. **Bootstrap.** The first member cannot be created from a surface that is
+   behind the login they do not yet have.
+2. **Lockout.** Nobody can sign in, so the browser path is unavailable. This is
+   the case the UI's stranding refusals exist to make rare — and the case that
+   is the reason this command is kept rather than deleted.
+3. **An API-only deployment.** `web_enabled=False` mounts no screens at all.
+
+Using it for routine changes is not forbidden; it just means the act is
+attributed to whatever `--by` was typed, and is a shell session on the
+application host rather than an authorized request.
 
 ## Typical first run
 

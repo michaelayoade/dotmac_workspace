@@ -40,12 +40,19 @@ afterwards be pointed at a different party while it exists. That is deliberate:
 silently freeing the tuple would make "disable" a step on the path to handing
 an external identity to somebody else.
 
-**It also does not revoke existing sessions.** A member who is signed in stays
-signed in until their session expires. Disabling guarantees only that no
-FURTHER session is derived from the binding — `finalize_external_login` and
+**It DOES revoke existing sessions**, since kernel 0.1.0a67. A member who is
+signed in is signed out immediately, not at token expiry: `auth_sessions` now
+carries `external_identity_binding_id`, and disabling revokes exactly the
+sessions that binding issued and nothing else. `finalize_external_login` and
 this call take the same row lock, so a login in flight either already committed
-or blocks here and then refuses. Closing the remaining gap needs session
-provenance on a KERNEL table; see `docs/ADOPTION-BLOCKERS.md`.
+— and is then revoked — or blocks here and afterwards refuses.
+
+This paragraph previously said the opposite, and kept saying it for a while
+after a67 landed. That is worth remembering rather than quietly fixing: the
+statement was true when written, the code changed underneath it, and an operator
+reading it would have been told that a member they had just cut off was still
+signed in. Documentation about a security consequence ages into a lie the same
+way an exemption does.
 """
 
 from __future__ import annotations
