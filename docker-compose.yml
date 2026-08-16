@@ -40,6 +40,28 @@ services:
       # admin role from the deploy path — see docs/PILOT-RUNBOOK.md.
       DATABASE_URL: ${DATABASE_URL:?the Workspace has no database without this}
 
+      # ── the rest of what the kernel refuses to start without ────────────
+      # `validate_settings` treats all of these as FATAL in production. They
+      # were missing from this file until 2026-08-16, which meant the only way
+      # to run a production Workspace was to hand-edit compose ON the host —
+      # and the first `rsync` of a new revision silently reverted it and took
+      # the service down. Config that lives only on a host is not configuration,
+      # it is an undocumented manual step waiting to be forgotten.
+      #
+      # Discover this set from `validate_settings` rather than one restart at a
+      # time; every one of them is fatal, and finding them serially costs a
+      # restart each.
+      PLATFORM_DATABASE_URL: ${PLATFORM_DATABASE_URL:?the platform plane has no database without this}
+      # Which Host headers this deployment will answer to. Unknown hosts fail
+      # closed — an empty value here is not "allow all", it is "serve nobody".
+      TRUSTED_HOSTS: ${TRUSTED_HOSTS:?an unset trusted-host list serves nobody}
+      PLATFORM_ROOT_DOMAIN: ${PLATFORM_ROOT_DOMAIN:?required}
+      # Both are secrets and both come from the environment file, never from a
+      # default: a compose default for a signing key is a production key that
+      # everybody who has read the repository already knows.
+      JWT_SECRET: ${JWT_SECRET:?no default is acceptable for a signing key}
+      SESSION_HASH_SECRET: ${SESSION_HASH_SECRET:?no default is acceptable for a session hash key}
+
       # ── the identity provider ───────────────────────────────────────────
       WORKSPACE_OIDC_ISSUER: ${WORKSPACE_OIDC_ISSUER:?no provider means no login}
       WORKSPACE_OIDC_CLIENT_ID: ${WORKSPACE_OIDC_CLIENT_ID:?required}
