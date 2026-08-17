@@ -248,7 +248,7 @@ build depend on a sibling checkout.
 
 ### Testing against an unpublished version
 
-Both current pins — `dotmac-kernel 0.1.0a64` and
+Both current pins — `dotmac-kernel 0.1.0a67` and
 `dotmac-application-directory 0.1.0a3` — are on the index, and `poetry.lock` is
 committed. The recipe below is for the NEXT time a pin runs ahead of a release:
 build the wheel and install it version-pinned, rather than relaxing the pin or
@@ -266,29 +266,32 @@ poetry run pytest --ignore=tests/db
 
 `make check` and `make test` work normally once both are on the index.
 
-## Status: reachable, not yet deployed
+## Status: production adopter
 
-**Nothing here runs anywhere, so this repository is still not a consumer of
-`dotmac-application-directory`** — the module's dossier correctly records zero
-production consumers. `docs/ADOPTION-BLOCKERS.md` is the live list, and the
-distinction it now turns on is worth being precise about: *"the launcher can be
-reached"* and *"the Workspace is in production"* are different claims, and only
-the first became true on 2026-08-15.
+The Workspace became `dotmac-application-directory`'s first production consumer
+in the 2026-08-16 real-IdP pilot at `workspace.dotmac.io`. It exact-pins
+`dotmac-application-directory 0.1.0a3`, composes its lineage, and exercised the
+directory-backed launcher across two workers. Starter records the module as
+`adopted`; one consumer does not earn `reuse-proven`.
+
+Directory visibility is not authorization. This Workspace owns its OIDC
+boundary and its host-only `dmws_session`; each target application owns its own
+authorization and session. The launcher remains a plain-link reader, and no
+application-access or shared-session authority has been added here.
 
 **B1 is cleared**: `dotmac-kernel 0.1.0a62` added the authentication-neutral
 permission seam, so the launcher declares and enforces
 `workspace.applications.read` instead of authenticating without authorizing.
 
 **B2 is cleared**: `/login`, its callback and `dmws_session` exist (see "Signing
-in" above), so `/applications` is reachable end to end for the first time. One
-follow-up is open and belongs to the KERNEL rather than here — session
-provenance on `auth_sessions`, which is what would let disabling a binding
-revoke exactly the sessions it produced.
+in" above), so `/applications` is reachable end to end. Kernel 0.1.0a67 owns
+session provenance on `auth_sessions`; disabling a binding selectively revokes
+the sessions it produced without a Workspace-owned shadow mechanism.
 
 **B3 is cleared**: both pins are published and `poetry.lock` is committed.
-**B4** is partly cleared — the remote exists, `main` is protected, and the jobs
-are wired; what is still missing is the only thing that ever mattered, a green
-RESULT rather than a written job.
+**B4 is cleared**: the remote exists, `main` is protected, and the quality,
+PostgreSQL, from-wheel, and engineering-standards jobs have all produced green
+results. Main run `31962357233` is the current recorded result.
 
 ## Commands
 

@@ -1,15 +1,15 @@
 # Adoption blockers
 
-**This repository is not deployed, and is therefore still not a consumer of
-anything.** `dotmac-application-directory` stays `audit-complete` with ZERO
-production consumers until every blocker below is cleared AND the Workspace
-actually runs in production — the second half of that sentence is the one that
-matters now, because the first half is nearly done.
+**All adoption blockers are closed.** The 2026-08-16 production pilot at
+`workspace.dotmac.io` made this repository the first consumer of
+`dotmac-application-directory 0.1.0a3`; Starter now records the module as
+`adopted`. One consumer proves adoption, not reuse.
 
-What changed on 2026-08-15: B2 closed, so the launcher is reachable end to end
-for the first time. What did not change: nothing here runs anywhere. "It can be
-reached" and "it is in production" are different claims, and only the first one
-is now true.
+Directory visibility is not authorization. The adopted module owns connected-
+application inventory only. The Workspace owns its OIDC boundary and host-only
+session, while each target application owns its authorization and session. No
+shared session, grant store, or local `dotmac-application-access` substitute was
+created to close this list.
 
 Recorded here rather than in a ticket because ADR-0018's rule applies: an
 exemption must state an enforceable premise, or the region is unmonitored rather
@@ -27,7 +27,7 @@ Status at a glance:
 | B1 | no cookie-compatible permission seam | **cleared** 2026-08-15 |
 | B2 | nothing issues `dmws_session`, no `/login` | **cleared** 2026-08-15 |
 | B3 | pinned dependencies not published | **cleared** 2026-08-15 |
-| B4 | no remote, no lock, no CI evidence | **partly cleared** — remote and lock yes, results pending |
+| B4 | no remote, no lock, no CI evidence | **cleared** 2026-08-16 — protected remote, lock and green hosted results |
 | B5 | kernel `testing` extra declared and unused | cleared 2026-08-12 |
 | B6 | the OIDC protocol client is implemented here, not consumed | **cleared 2026-08-15** — `dotmac-auth-oidc 0.1.0a1` published, pinned, local copy deleted |
 
@@ -170,7 +170,7 @@ came from.
 
 **Cleared (2026-08-15).**
 
-- `dotmac-kernel 0.1.0a64` is published and resolves from the Forgejo index.
+- `dotmac-kernel 0.1.0a67` is published and resolves from the Forgejo index.
 - `dotmac-application-directory 0.1.0a3` is published and resolves.
 
 `poetry.lock` is generated and committed, and both pins install.
@@ -206,14 +206,14 @@ lineage root declares `requires=("tenant_scope_catalog.v1",
 ASSEMBLY answers those requirements — `src/dotmac_workspace/migration_bindings.py`,
 installed by `alembic/env.py` and exported to Alembic's graph commands through
 `DOTMAC_MIGRATION_BINDINGS`. It also floors the kernel at `>=0.1.0a56`, which
-`0.1.0a64` satisfies.
+`0.1.0a67` satisfies.
 
 ## B4 — No remote, no lock, no CI evidence
 
-**Partly cleared.** The remote exists, `main` is protected and requires a pull
-request with four green jobs, and `poetry.lock` is committed. What remains is
-what always remained: a claim about CI is a claim about a RESULT, and each job's
-first genuine run is the only thing that turns a written job into evidence.
+**Cleared 2026-08-16.** The remote exists, `main` is protected and requires a
+pull request with four green jobs, `poetry.lock` is committed, and every job has
+produced real hosted results. Main run `31962357233` is the current recorded
+quality, PostgreSQL, from-wheel, and engineering-standards evidence.
 
 Added:
 
@@ -235,15 +235,13 @@ same ceremony and asserts that exactly one consumed it, and
 `tests/db/test_login_state_isolation.py`, which proves the tenant boundary on
 `workspace_login_states` through the ONLINE role.
 
-Still open:
+The acceptance rule remains:
 
-1. **Results, not files.** Every property proven by `tests/db` is proven only
-   by a green `postgres` job; a run that has not happened is not evidence, and
-   nothing in this repository may claim otherwise.
-2. **The `from-wheel` job has the least history.** It is the only job that
-   exercises the built artifact — package data, `__file__`-relative paths, a
-   dependency satisfied only by the dev group — and the class of failure it
-   catches is invisible everywhere else.
+1. **Results, not files.** Every property proven by `tests/db` remains proven
+   only by a green PostgreSQL job on the revision being accepted.
+2. **The from-wheel result is independent evidence.** It is the only job that
+   exercises the built artifact — package data, `__file__`-relative paths, and
+   dependency closure — so a later green source-tree test cannot replace it.
 
 ## B6 — The OIDC protocol client is implemented here, not consumed
 
