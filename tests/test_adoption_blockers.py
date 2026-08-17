@@ -1,9 +1,8 @@
 """The adoption blockers stay visible, and stay unclosed the wrong way.
 
 ADR-0018: an exemption must state an enforceable premise, or the region is
-unmonitored rather than exempt. `docs/ADOPTION-BLOCKERS.md` is this repository's
-statement that it is a scaffold rather than a consumer, and these tests are what
-stop that statement drifting away from the code.
+unmonitored rather than exempt. These tests keep the repository's adoption
+statements aligned with the production state and the module dossier.
 
 The important one is `test_the_guard_does_not_hand_roll_a_role_check`, and it
 outlives the blocker it was written for. B1 has since been closed the RIGHT way
@@ -12,9 +11,9 @@ anyone editing this file, and closing it locally by querying roles here would
 look like progress while making this plane one that falls behind kernel security
 fixes. The guard stays.
 
-B2 is open, so this repository is still a scaffold and
-`dotmac-application-directory` still has zero production consumers. The file
-these tests read must keep saying so until that is untrue.
+B2 is closed and the 2026-08-16 production pilot made this repository the first
+consumer of `dotmac-application-directory`. That adoption must be stated without
+turning directory visibility into authorization or a shared target-app session.
 """
 
 from __future__ import annotations
@@ -27,6 +26,7 @@ from dotmac_workspace import web_auth
 from dotmac_workspace.launcher import guard
 
 BLOCKERS = Path(__file__).resolve().parents[1] / "docs" / "ADOPTION-BLOCKERS.md"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GUARD_SOURCE = Path(inspect.getfile(guard)).read_text(encoding="utf-8")
 AUTH_SOURCE = Path(inspect.getfile(web_auth)).read_text(encoding="utf-8")
 #: Both halves of the Workspace's guard: "may you?" (the launcher's, which
@@ -37,17 +37,35 @@ AUTH_SOURCE = Path(inspect.getfile(web_auth)).read_text(encoding="utf-8")
 GUARDED_SOURCES = {"launcher/guard.py": GUARD_SOURCE, "web_auth.py": AUTH_SOURCE}
 
 
-def test_the_blockers_file_exists_and_names_the_permission_code() -> None:
-    """The permission code is the load-bearing name in that file. It named the
-    decision B1 could not enforce; it now names the decision the launcher DOES
-    enforce, and the file has to keep tracking which."""
+def test_the_repository_records_production_adoption_without_moving_authority() -> None:
+    """Every adoption statement agrees on the earned state and its boundary."""
     assert BLOCKERS.is_file()
-    text = BLOCKERS.read_text(encoding="utf-8")
-    assert "workspace.applications.read" in text
-    assert "audit-complete" in text, (
-        "the blockers file must keep stating that the directory has zero "
-        "production consumers — that is what the dossier claims"
-    )
+    adoption_sources = {
+        "README.md": PROJECT_ROOT / "README.md",
+        "docs/ADOPTION-BLOCKERS.md": BLOCKERS,
+        "docs/PILOT-RUNBOOK.md": PROJECT_ROOT / "docs" / "PILOT-RUNBOOK.md",
+        "pyproject.toml": PROJECT_ROOT / "pyproject.toml",
+    }
+    assert set(adoption_sources) == {
+        "README.md",
+        "docs/ADOPTION-BLOCKERS.md",
+        "docs/PILOT-RUNBOOK.md",
+        "pyproject.toml",
+    }, "the adoption-claim inventory changed without updating this ratchet"
+
+    for label, path in adoption_sources.items():
+        text = path.read_text(encoding="utf-8")
+        assert "audit-complete" not in text, f"{label} still denies adoption"
+        assert (
+            "zero production consumers" not in text.lower()
+        ), f"{label} still denies the production consumer"
+
+    blockers = BLOCKERS.read_text(encoding="utf-8")
+    assert "workspace.applications.read" in blockers
+    assert "adopted" in blockers
+    assert "workspace.dotmac.io" in blockers
+    assert "dotmac-application-directory 0.1.0a3" in blockers
+    assert "directory visibility is not authorization" in blockers.lower()
 
 
 def test_the_blockers_file_records_b2_against_a_surface_that_now_exists() -> None:

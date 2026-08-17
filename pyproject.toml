@@ -43,9 +43,11 @@ python = ">=3.12,<3.14"
 # session revocation, in a different transaction from the kernel's disable.
 dotmac-kernel = { version = "0.1.0a67", source = "forgejo" }
 # The tenant's connected-application portfolio, and the permanent owner of the
-# `ApplicationDescriptor` contract (ADR-0021 §4). This assembly is its INTENDED
-# first consumer and is not yet one: nothing here is deployed, so the module's
-# dossier correctly says zero production consumers. See docs/ADOPTION-BLOCKERS.md.
+# `ApplicationDescriptor` contract (ADR-0021 §4). This assembly is its first
+# production consumer: the 2026-08-16 real-IdP pilot at workspace.dotmac.io
+# exercised the exact-pinned module, and its Starter dossier now says `adopted`.
+# That adopts inventory only; target applications still own authorization and
+# their sessions. See docs/ADOPTION-BLOCKERS.md.
 #
 # 0.1.0a3 floors the kernel at >=0.1.0a56 (the release allocating `mod_appdir` in
 # the migration-owner ledger) and its lineage root declares

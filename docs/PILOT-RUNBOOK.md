@@ -1,10 +1,11 @@
 # The real-IdP pilot — what it proves, and how to run it
 
-The Workspace's login has never authenticated a human being. Its CI proves the
-protocol against a provider double that mints tokens with a throwaway key; this
-runbook is how it meets a real Keycloak, a real browser and a real member.
+The Workspace's login authenticated a real member during the 2026-08-16 pilot.
+Its CI also proves the protocol against a provider double that mints tokens with
+a throwaway key; this runbook remains the repeatable procedure for meeting a
+real Keycloak, a real browser and a real member.
 
-**Status: the IdP is LIVE; the Workspace is not deployed yet.**
+**Status: executed successfully in production on 2026-08-16.**
 
 `https://idp.dotmac.io/realms/dotmac` is serving: valid TLS, the permanent
 issuer, RS256 keys in JWKS, and the `dotmac-workspace` client already
@@ -12,18 +13,21 @@ configured to the table in section 2. Section 2 is therefore a description of
 what exists, not instructions to follow — re-running it would be re-creating a
 client that is already there.
 
-The Workspace host is `94.72.104.67` (`workspace.dotmac.io`), provisioned and
-key-only, with nothing deployed on it yet. So sections 4 onward are still
-forward-looking.
+The Workspace runs at `workspace.dotmac.io`. The pilot used two application
+workers and proved real discovery/login, cross-worker ceremony consumption,
+replay refusal, login-CSRF protection, explicit-binding refusal, selective
+session revocation, and logout. Sections 4 onward are retained as the rerunnable
+operator procedure, not as evidence that work is still pending.
 
 ## What this pilot is actually testing
 
 Not "does OIDC work". The package's own suite already runs signature
 verification, the algorithm allow-list, PKCE and the nonce check against a real
 key pair, and the Workspace's suite runs them from a consumer's side. Those are
-proven. What is NOT proven, and what only a real deployment can settle:
+proven. The risks below could only be settled by a real deployment; the
+2026-08-16 pilot supplied that evidence:
 
-| unproven today | what the pilot settles it with |
+| production risk | what the pilot settled it with |
 |---|---|
 | discovery against a real realm | Keycloak's document, not our fixture's four fields |
 | `kid` rotation | rotate the realm's signing key mid-session and sign in again |
