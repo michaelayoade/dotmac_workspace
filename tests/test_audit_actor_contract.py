@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import ast
+import tomllib
 from pathlib import Path
 
 SERVICE = Path("src/dotmac_workspace/identity/service.py")
+PYPROJECT = Path("pyproject.toml")
 
 
 def _actor_problem(call: ast.Call) -> str | None:
@@ -39,6 +41,14 @@ def test_every_workspace_audit_writer_names_the_actor_pair() -> None:
         if (problem := _actor_problem(call))
     ]
     assert not problems, f"non-canonical audit actor callers: {problems}"
+
+
+def test_workspace_pins_the_kernel_that_refuses_actor_derivation() -> None:
+    """The explicit callers and the strict callee land as one adoption."""
+    dependencies = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["tool"][
+        "poetry"
+    ]["dependencies"]
+    assert dependencies["dotmac-kernel"]["version"] == "0.1.0a70"
 
 
 def test_actor_guard_ignores_prose_that_only_names_the_writer() -> None:

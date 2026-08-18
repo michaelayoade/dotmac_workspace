@@ -248,7 +248,7 @@ build depend on a sibling checkout.
 
 ### Testing against an unpublished version
 
-Both current pins — `dotmac-kernel 0.1.0a67` and
+Both current pins — `dotmac-kernel 0.1.0a70` and
 `dotmac-application-directory 0.1.0a3` — are on the index, and `poetry.lock` is
 committed. The recipe below is for the NEXT time a pin runs ahead of a release:
 build the wheel and install it version-pinned, rather than relaxing the pin or
@@ -282,6 +282,11 @@ application-access or shared-session authority has been added here.
 **B1 is cleared**: `dotmac-kernel 0.1.0a62` added the authentication-neutral
 permission seam, so the launcher declares and enforces
 `workspace.applications.read` instead of authenticating without authorizing.
+
+The kernel pin is now `0.1.0a70`: Workspace's two audit writers name the
+canonical `(actor_type, actor_id)` pair explicitly, and the consumed kernel no
+longer derives either field from `actor_party_id`. The caller migration and the
+strict callee therefore ship as one adoption, with no compatibility fallback.
 
 **B2 is cleared**: `/login`, its callback and `dmws_session` exist (see "Signing
 in" above), so `/applications` is reachable end to end. Kernel 0.1.0a67 owns

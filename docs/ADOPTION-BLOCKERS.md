@@ -170,7 +170,7 @@ came from.
 
 **Cleared (2026-08-15).**
 
-- `dotmac-kernel 0.1.0a67` is published and resolves from the Forgejo index.
+- `dotmac-kernel 0.1.0a70` is published and resolves from the Forgejo index.
 - `dotmac-application-directory 0.1.0a3` is published and resolves.
 
 `poetry.lock` is generated and committed, and both pins install.
@@ -206,7 +206,9 @@ lineage root declares `requires=("tenant_scope_catalog.v1",
 ASSEMBLY answers those requirements — `src/dotmac_workspace/migration_bindings.py`,
 installed by `alembic/env.py` and exported to Alembic's graph commands through
 `DOTMAC_MIGRATION_BINDINGS`. It also floors the kernel at `>=0.1.0a56`, which
-`0.1.0a67` satisfies.
+`0.1.0a70` satisfies. The later pin also consumes the strict audit-actor
+contract: every non-system audit writer supplies `(actor_type, actor_id)` and
+`actor_party_id` is enrichment only.
 
 ## B4 — No remote, no lock, no CI evidence
 

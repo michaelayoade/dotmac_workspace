@@ -41,7 +41,7 @@ python = ">=3.12,<3.14"
 # The pin moves rather than the code working around it, for the same reason it
 # moved to a64: a shadow column here would make this plane a second writer of
 # session revocation, in a different transaction from the kernel's disable.
-dotmac-kernel = { version = "0.1.0a67", source = "forgejo" }
+dotmac-kernel = { version = "0.1.0a70", source = "forgejo" }
 # The tenant's connected-application portfolio, and the permanent owner of the
 # `ApplicationDescriptor` contract (ADR-0021 §4). This assembly is its first
 # production consumer: the 2026-08-16 real-IdP pilot at workspace.dotmac.io
