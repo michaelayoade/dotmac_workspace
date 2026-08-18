@@ -185,6 +185,11 @@ image name or path.
 - No generic data-federation module.
 - No second audit, messaging, inbox, idempotency, permissions or entitlement
   mechanism — the kernel owns all six.
+- Every call to `write_audit_event` names the canonical actor pair explicitly:
+  `actor_type` plus `actor_id`. `actor_party_id` is accountability enrichment,
+  not permission to depend on a kernel compatibility derivation. The Workspace
+  has authenticated the Party at both current call sites, so the pair is
+  `("user", str(party.id))`.
 - No connector registry — Sub's integration platform is the product-first source
   when API/event transport is needed.
 - **No access-allocation domain module here.** `dotmac-application-access` is a
