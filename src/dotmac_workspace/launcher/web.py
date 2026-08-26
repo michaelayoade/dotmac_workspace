@@ -46,12 +46,13 @@ import html
 from dotmac_application_directory import launchable_bindings
 from dotmac_kernel.deps import get_db
 from dotmac_kernel.models import Party
+from dotmac_kernel.templating import render
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from dotmac_workspace.launcher.guard import require_applications_read
-from dotmac_workspace.page import render_page
+from dotmac_workspace.page import SHELL_TEMPLATE
 from dotmac_workspace.session_contract import LOGOUT_PATH
 
 router = APIRouter()
@@ -79,7 +80,7 @@ def _tile(*, name: str, instance: str, url: str, stale: bool) -> str:
     )
 
 
-def _page(body: str) -> str:
+def _page(request: Request, body: str) -> HTMLResponse:
     """The launcher screen, in the assembly's one HTML shell.
 
     The shell is shared with the login screen so the CSRF header bridge can
@@ -88,14 +89,18 @@ def _page(body: str) -> str:
     CSRF-exempt safe method that a third-party page can trigger by loading an
     image is a forced logout.
     """
-    return render_page(
-        title="Applications",
-        body=(
-            "<h1>Your applications</h1>"
-            f"{body}"
-            f'<button type="button" hx-post="{LOGOUT_PATH}" '
-            'hx-swap="none">Sign out</button>'
-        ),
+    return render(
+        request,
+        SHELL_TEMPLATE,
+        {
+            "title": "Applications",
+            "body": (
+                "<h1>Your applications</h1>"
+                f"{body}"
+                f'<button type="button" hx-post="{LOGOUT_PATH}" '
+                'hx-swap="none">Sign out</button>'
+            ),
+        },
     )
 
 
@@ -104,7 +109,7 @@ def launcher(
     request: Request,
     member: Party = Depends(require_applications_read),
     db: Session = Depends(get_db),
-) -> str:
+) -> HTMLResponse:
     """The launcher.
 
     A thin adapter (ADR-0010): it validates, authorizes the VIEWER against the
@@ -130,7 +135,9 @@ def launcher(
     bindings = launchable_bindings(db, tenant_id=tenant.id)
 
     if not bindings:
-        return _page("<p>No applications are connected to this workspace yet.</p>")
+        return _page(
+            request, "<p>No applications are connected to this workspace yet.</p>"
+        )
 
     tiles = "".join(
         _tile(
@@ -143,7 +150,7 @@ def launcher(
         )
         for binding in bindings
     )
-    return _page(f'<ul class="dmws-tiles">{tiles}</ul>')
+    return _page(request, f'<ul class="dmws-tiles">{tiles}</ul>')
 
 
 __all__ = ["router"]

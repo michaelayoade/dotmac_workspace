@@ -43,6 +43,7 @@ from uuid import UUID
 
 from dotmac_kernel.deps import get_db
 from dotmac_kernel.models import Party
+from dotmac_kernel.templating import render
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
@@ -55,7 +56,7 @@ from dotmac_workspace.operator.guard import (
     require_members_manage,
     require_members_read,
 )
-from dotmac_workspace.page import render_page
+from dotmac_workspace.page import SHELL_TEMPLATE
 from dotmac_workspace.session_contract import LOGOUT_PATH
 
 router = APIRouter()
@@ -81,11 +82,11 @@ def _empty_state(*, title: str, message: str) -> str:
     ones, so the compiled stylesheet already styles them and hard rule 16 is
     satisfied.
 
-    The component itself is a JINJA macro, and this assembly renders no
-    templates: its one shell is `page.py`. So the markup is emitted here rather
-    than imported. That is the honest tradeoff and it has a cost — a change to
-    the macro's internal structure would not reach this function. The moment
-    this plane grows a Jinja surface, the macro is the thing to call; until
+    The component itself is a Jinja macro, while this screen remains a Python
+    fragment handed to the shared Jinja document shell. The markup is therefore
+    emitted here rather than imported. That tradeoff has a cost — a change to
+    the macro's internal structure would not reach this function. When the
+    screen itself migrates to a template, the macro is the thing to call; until
     then, using the declared classes beats inventing a `.dmws-empty` that
     duplicates a component the design system already publishes.
     """
@@ -97,24 +98,28 @@ def _empty_state(*, title: str, message: str) -> str:
     )
 
 
-def _shell(*, title: str, screen: str) -> str:
+def _shell(request: Request, *, title: str, screen: str) -> HTMLResponse:
     """The page around a screen, with the nav and the sign-out control.
 
     Sign-out is `hx-post`, never a link: a CSRF-exempt safe method that a
     third-party page can trigger by loading an image is a forced logout (F7).
     """
-    return render_page(
-        title=title,
-        body=(
-            '<nav class="dmws-nav">'
-            '<a href="/applications">Applications</a> '
-            f'<a href="{MEMBERS_PATH}">Members</a> '
-            f'<a href="{IDENTITY_PATH}">Identity</a>'
-            "</nav>"
-            f'<div id="{SCREEN_ID}">{screen}</div>'
-            f'<button type="button" hx-post="{LOGOUT_PATH}" '
-            'hx-swap="none">Sign out</button>'
-        ),
+    return render(
+        request,
+        SHELL_TEMPLATE,
+        {
+            "title": title,
+            "body": (
+                '<nav class="dmws-nav">'
+                '<a href="/applications">Applications</a> '
+                f'<a href="{MEMBERS_PATH}">Members</a> '
+                f'<a href="{IDENTITY_PATH}">Identity</a>'
+                "</nav>"
+                f'<div id="{SCREEN_ID}">{screen}</div>'
+                f'<button type="button" hx-post="{LOGOUT_PATH}" '
+                'hx-swap="none">Sign out</button>'
+            ),
+        },
     )
 
 
@@ -261,10 +266,10 @@ def members(
     request: Request,
     member: Party = Depends(require_members_read),
     db: Session = Depends(get_db),
-) -> str:
+) -> HTMLResponse:
     """The members screen."""
     rows = service.list_members(db, tenant=request.state.tenant)
-    return _shell(title="Members", screen=_members_screen(rows))
+    return _shell(request, title="Members", screen=_members_screen(rows))
 
 
 @router.post(MEMBERS_PATH, response_class=HTMLResponse)
@@ -329,11 +334,12 @@ def identity(
     request: Request,
     member: Party = Depends(require_identity_read),
     db: Session = Depends(get_db),
-) -> str:
+) -> HTMLResponse:
     """The identity screen."""
     rows = service.list_members(db, tenant=request.state.tenant)
     provider = provider_or_none()
     return _shell(
+        request,
         title="Identity",
         screen=_identity_screen(rows, issuer=provider.issuer if provider else ""),
     )

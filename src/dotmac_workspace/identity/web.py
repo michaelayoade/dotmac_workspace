@@ -72,6 +72,7 @@ from urllib.parse import quote
 
 from dotmac_kernel.deps import get_db, require_tenant
 from dotmac_kernel.models import Party, Tenant
+from dotmac_kernel.templating import render
 from dotmac_kernel.web_deps import is_secure_request, safe_next_url
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -88,7 +89,7 @@ from dotmac_workspace.identity.session import (
     clear_cookie,
     clear_state_cookie,
 )
-from dotmac_workspace.page import render_page
+from dotmac_workspace.page import SHELL_TEMPLATE
 from dotmac_workspace.session_contract import (
     CALLBACK_PATH,
     DEFAULT_LANDING_PATH,
@@ -115,23 +116,26 @@ HTMX_HEADER = "hx-request"
 HTMX_REDIRECT_HEADER = "HX-Redirect"
 
 
-def _refusal(message: str, *, status_code: int) -> HTMLResponse:
+def _refusal(request: Request, message: str, *, status_code: int) -> HTMLResponse:
     """One refusal shape. Says what the visitor can DO, never what went wrong."""
-    return HTMLResponse(
-        render_page(
-            title="Sign in",
-            body=(
+    return render(
+        request,
+        SHELL_TEMPLATE,
+        {
+            "title": "Sign in",
+            "body": (
                 "<h1>Sign in</h1>"
                 f"<p>{html.escape(message)}</p>"
                 f'<p><a href="{LOGIN_PATH}">Try again</a></p>'
             ),
-        ),
+        },
         status_code=status_code,
     )
 
 
 @router.get(LOGIN_PATH, response_class=HTMLResponse)
 def login_page(
+    request: Request,
     tenant: Tenant = Depends(require_tenant),
     next_path: str = Query(default="", alias="next"),
 ) -> Response:
@@ -150,6 +154,7 @@ def login_page(
         # login configured. `config.configuration_errors()` is what makes that
         # fatal in production; here it is an honest 503.
         return _refusal(
+            request,
             "Federated sign-in is not configured for this workspace. "
             "Contact your administrator.",
             status_code=503,
@@ -161,17 +166,19 @@ def login_page(
     # value. `hx-vals` would need a third (JSON inside an attribute) and buys
     # nothing here.
     target = html.escape(f"{LOGIN_PATH}?next={quote(landing, safe='/')}", quote=True)
-    return HTMLResponse(
-        render_page(
-            title="Sign in",
-            body=(
+    return render(
+        request,
+        SHELL_TEMPLATE,
+        {
+            "title": "Sign in",
+            "body": (
                 "<h1>Sign in</h1>"
                 "<p>Sign in to your workspace with your organisation's "
                 "identity provider.</p>"
                 f'<button type="button" hx-post="{target}" '
                 'hx-swap="none">Continue</button>'
             ),
-        )
+        },
     )
 
 
@@ -195,11 +202,12 @@ def begin_login(
         )
     except ProviderNotConfiguredError:
         return _refusal(
+            request,
             "Federated sign-in is not configured for this workspace.",
             status_code=503,
         )
     except service.LoginRefused:
-        return _refusal("Sign-in could not be started.", status_code=502)
+        return _refusal(request, "Sign-in could not be started.", status_code=502)
 
     if request.headers.get(HTMX_HEADER):
         response: Response = Response(
@@ -264,9 +272,9 @@ def callback(
             tenant.id,
             error,
         )
-        return _done(_refusal("Sign-in was not completed.", status_code=403))
+        return _done(_refusal(request, "Sign-in was not completed.", status_code=403))
     if not code or not state:
-        return _done(_refusal("Sign-in was not completed.", status_code=400))
+        return _done(_refusal(request, "Sign-in was not completed.", status_code=400))
 
     try:
         completed = service.complete_login(
@@ -280,12 +288,13 @@ def callback(
     except ProviderNotConfiguredError:
         return _done(
             _refusal(
+                request,
                 "Federated sign-in is not configured for this workspace.",
                 status_code=503,
             )
         )
     except service.LoginRefused:
-        return _done(_refusal("Sign-in was not completed.", status_code=403))
+        return _done(_refusal(request, "Sign-in was not completed.", status_code=403))
 
     response = RedirectResponse(completed.return_path, status_code=303)
     attach_cookie(
