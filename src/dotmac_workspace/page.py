@@ -32,8 +32,10 @@ and it composes the same document this function does.
 That is the duplication the paragraph above forbids, so it is not left on trust:
 `tests/test_web_facet_shell.py` renders both with the same inputs and requires
 them to agree, link for link and script for script. The stylesheet cascade is
-not duplicated at all — `stylesheets()` below is the one source, read by this
-function and, through `ProductAssemblySpec.stylesheets`, by the template.
+not duplicated at all — `stylesheets()` below is the one source. This function
+reads it, and the template is HANDED it: `ProductAssemblySpec.stylesheets` is
+deliberately left empty (see `assembly.py`), so the template's fallback to
+`surface.stylesheets` is a path nothing currently takes.
 
 The honest alternative was to delete this function and route every page through
 `dotmac_kernel.templating.render()`. It was not taken here because `render()`
@@ -66,11 +68,11 @@ _CSRF_BRIDGE: Final[str] = "/static/js/csrf.js"
 #:   stops matching the fleet the first time a token is retuned.
 #:
 #: PUBLIC (it lost its underscore when kernel 0.1.0a97 arrived) because the
-#: assembly now has to name the same two links a second time: a declared web
-#: facet carries a shell TEMPLATE, and the kernel renders that shell from
-#: `ProductAssemblySpec.stylesheets` rather than from this module. Exporting the
-#: constant is what keeps "the cascade this plane serves" a single value instead
-#: of a URL written down in two files — see `assembly.py` and
+#: facet's shell template renders the same two links and must read them from
+#: here rather than spell them again. The kernel CAN feed a shell from
+#: `ProductAssemblySpec.stylesheets`, but this assembly leaves that slot empty
+#: on purpose, so `stylesheets()` below stays the single source of "the cascade
+#: this plane serves" — see `assembly.py` and
 #: `templates/layouts/workspace.html`.
 WORKSPACE_CSS: Final[str] = "/static/css/workspace.css"
 

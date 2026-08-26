@@ -2,16 +2,22 @@
 
 A control this repository states, that some part of it currently does not obey.
 Each entry names the control, what bypasses it, why the bypass was accepted, the
-compensating check that keeps the bypass from drifting, and — the part that
-makes this a ledger rather than an excuse list — **the condition under which the
-entry is deleted**.
+compensating check that keeps the bypass from drifting, an accountable **owner**,
+and — the part that makes this a ledger rather than an excuse list — **the
+condition under which the bypass is remediated**.
 
-An entry with no retirement condition is not an exception. It is a rule that was
-quietly rewritten.
+An entry with no remediation condition is not an exception. It is a rule that was
+quietly rewritten. An entry with no owner is one nobody has agreed to retire.
+
+**This ledger is append-only.** A remediated entry is marked `REMEDIATED`, dated,
+and KEPT. Deleting it would erase the record that the control was ever bypassed,
+which is precisely the history a reader needs when the same pressure recurs — and
+would make the ledger's length a measure of present debt rather than of what this
+repository has learned. Status is one of `OPEN` or `REMEDIATED`.
 
 ---
 
-## CE-001 — the browser shell is written twice
+## CE-001 — the browser shell is written twice · `OPEN`
 
 **Control.** `src/dotmac_workspace/page.py`'s module docstring: the shell must
 not be "two hand-written shells, because the thing they carry is not
@@ -38,11 +44,15 @@ with the same inputs and requires the documents to agree, plus sensitivity
 proofs that the comparison bites. This controls DRIFT. It does not restore the
 control: the rule is one shell, and there are two.
 
-**Retirement condition.** Delete this entry when `page.render_page` is gone and
-every browser route renders the facet shell through
+**Remediation condition.** Mark this entry `REMEDIATED` — do not delete it —
+when `page.render_page` is gone and every browser route renders the facet shell
+through
 `dotmac_kernel.templating.render()`. That change is a `Request` threaded through
 the three `_page`/`_shell`/`_refusal` helpers and their tests, and it is worth
 doing on its own footing rather than here. `tests/test_web_facet_shell.py` goes
 with it — an agreement test between one thing and itself is noise.
 
-**Owner.** Unassigned. **Opened.** 2026-08-26, adopting kernel 0.1.0a97.
+**Status.** `OPEN`.
+**Owner.** Michael (repository owner). Reassign by editing this line; an entry
+whose owner is a role nobody holds is unowned.
+**Opened.** 2026-08-26, adopting kernel 0.1.0a97 (PR #13).

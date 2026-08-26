@@ -32,12 +32,18 @@
 
   ## The stylesheet cascade
 
-  `stylesheets` when a caller supplies one (that is `page.py`, through the
-  equivalence guard), otherwise `surface.stylesheets` — the kernel's own
-  per-request cascade, fed from `ProductAssemblySpec.stylesheets`. Both resolve
-  to the same two links in the same order: `dotmac-ui`'s compiled stylesheet
-  first, so its `--dmui-*` tokens are defined, then this assembly's `.dmws-*`
-  rules which are written entirely in terms of them.
+  `stylesheets` when a caller supplies one — which is every render this plane
+  performs, since `page.py` hands it `page.stylesheets()` through the
+  equivalence guard. The `surface.stylesheets` fallback is the kernel's own
+  per-request cascade, fed from `ProductAssemblySpec.stylesheets`; this assembly
+  leaves that slot EMPTY on purpose (see `assembly.py`), so the fallback
+  currently resolves to nothing and no page takes it.
+
+  The supplied cascade is two links in this order: `dotmac-ui`'s compiled
+  stylesheet first, so its `--dmui-*` tokens are defined, then this assembly's
+  `.dmws-*` rules, which are written entirely in terms of them. Order is
+  load-bearing — reversed, every rule in the second file resolves to nothing and
+  the page renders unstyled with no error anywhere.
 
   ## The `body` block
 

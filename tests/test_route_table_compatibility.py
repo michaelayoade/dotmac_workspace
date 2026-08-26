@@ -112,14 +112,55 @@ def test_no_pre_adoption_url_moved() -> None:
     )
 
 
-def test_no_route_is_resolved_by_name() -> None:
-    """Route names are facet-qualified now, so resolving by name is breaking."""
-    offenders = [
+#: Every suffix this plane can serve a route name from. `.py` was the whole
+#: story until a97, because the assembly rendered no templates at all — adopting
+#: the facet introduced an HTML surface, and Jinja's `url_for` resolves route
+#: names exactly as Starlette's does. A guard that scanned only Python would
+#: have gone on passing while the one new file type it needed to cover appeared
+#: underneath it.
+NAME_RESOLVING_SUFFIXES = ("*.py", "*.html", "*.jinja", "*.jinja2", "*.j2")
+
+#: The spellings that turn a route NAME into a URL, in Python and in Jinja.
+NAME_RESOLVERS = ("url_for(", "url_path_for(")
+
+
+def _name_resolving_files() -> list[str]:
+    return sorted(
         str(path.relative_to(SRC))
-        for path in SRC.rglob("*.py")
+        for suffix in NAME_RESOLVING_SUFFIXES
+        for path in SRC.rglob(suffix)
         for text in [path.read_text(encoding="utf-8")]
-        if "url_for(" in text or "url_path_for(" in text
-    ]
+        if any(resolver in text for resolver in NAME_RESOLVERS)
+    )
+
+
+def test_the_name_resolution_scan_covers_the_html_surface() -> None:
+    """Sensitivity proof: the scan must actually reach templates.
+
+    `test_no_route_is_resolved_by_name` asserts an EMPTY result, so it passes
+    just as happily when it scans nothing. This pins that the HTML surface the
+    facet introduced is inside its reach, and that a `url_for` written there
+    would be seen.
+    """
+    templates = list(SRC.rglob("*.html"))
+    assert templates, (
+        "no .html found under src/ — the facet shell should be here, and the "
+        "name-resolution scan below is no longer covering an HTML surface"
+    )
+    probe = templates[0].read_text(encoding="utf-8") + '\n{{ url_for("x") }}\n'
+    assert any(
+        resolver in probe for resolver in NAME_RESOLVERS
+    ), "the scan would not notice a url_for in a template"
+
+
+def test_no_route_is_resolved_by_name() -> None:
+    """Route names are facet-qualified now, so resolving by name is breaking.
+
+    a97 renamed 20 of this plane's 28 routes (`login_page` became
+    `web:staff_admin:identity:legacy:login_page`). That was safe ONLY because
+    nothing here turns a name into a URL. This is the guard that keeps it safe.
+    """
+    offenders = _name_resolving_files()
     assert not offenders, (
         "these resolve routes by name, which a97's facet-qualified names break: "
         + ", ".join(offenders)
