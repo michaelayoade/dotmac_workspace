@@ -96,14 +96,14 @@
     },
     {
       "authority_id": "workspace-member-administration",
-      "subject": "Deciding who is a member of this Workspace and which external subject a member is bound to. This is the plane's most privileged surface: it can add a member, revoke one, bind an external identity to a party, and disable a binding. It decides MEMBERSHIP OF THIS PLANE ONLY - it grants no entry to any target application, mints no target token, and writes no target's grants, because the launcher renders links and each target owns its own authorization (ADR-0021 SS5). The kernel owns the permission arithmetic (deps.authorize_party); this repository owns which permission each route demands and what a refusal looks like.",
+      "subject": "Deciding who is a member of this Workspace and which external subject a member is bound to. Four entries carry that decision - add_member, revoke_role, bind_member and disable_binding_for - guarded by the would_strand_tenant invariant so a change cannot leave the tenant with no administrator; add_member is named as the interface because membership creation is the decision the other three qualify. This is the plane's most privileged surface. It decides MEMBERSHIP OF THIS PLANE ONLY - it grants no entry to any target application, mints no target token, and writes no target's grants, because the launcher renders links and each target owns its own authorization (ADR-0021 SS5). The kernel owns the permission arithmetic (deps.authorize_party); this repository owns which permission each route demands and what a refusal looks like.",
       "protected_resources": [
         "workspace-membership",
         "workspace-identity-binding"
       ],
       "owner_component": "workspace-member-administration",
       "owner_implementation": "src/dotmac_workspace/operator/service.py",
-      "decision_interface": "dotmac_workspace.operator.guard",
+      "decision_interface": "dotmac_workspace.operator.service.add_member",
       "canonical_writer_paths": [
         "src/dotmac_workspace/operator/service.py"
       ],
