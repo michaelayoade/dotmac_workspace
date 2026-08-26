@@ -41,7 +41,23 @@ python = ">=3.12,<3.14"
 # The pin moves rather than the code working around it, for the same reason it
 # moved to a64: a shadow column here would make this plane a second writer of
 # session revocation, in a different transaction from the kernel's disable.
-dotmac-kernel = { version = "0.1.0a70", source = "forgejo" }
+#
+# a97 (2026-08-25) replaces the IMPLICIT browser surface with a declared one.
+# Before it, an assembly whose modules carried `web_routers` and which declared
+# no facet was mounted anyway, behind an authentication policy the kernel had
+# silently downgraded. a97 refuses that composition outright:
+# `WebSurfaceRegistry` raises `UnknownFacetError` inside `create_app`. This
+# assembly has three such manifests (`identity`, `launcher`, `operator`), so it
+# does not boot on a97 until it states, in ONE place, who its browser surface is
+# for, how that audience is authenticated, and what admits them — see
+# `assembly.py`.
+#
+# The pin moves rather than the code working around it, for the same reason it
+# moved to a64 and a67. A silent authentication downgrade is the worst defect
+# available on this plane specifically, and an assembly that answered a97 by
+# staying on a70 would keep that defect AND stop receiving every later kernel
+# security fix. There is no local mitigation that is not a second authority.
+dotmac-kernel = { version = "0.1.0a97", source = "forgejo" }
 # The tenant's connected-application portfolio, and the permanent owner of the
 # `ApplicationDescriptor` contract (ADR-0021 §4). This assembly is its first
 # production consumer: the 2026-08-16 real-IdP pilot at workspace.dotmac.io

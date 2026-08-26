@@ -56,6 +56,11 @@ def _dmui_names_actually_shipped() -> set[str]:
       are not in the AST at all, so they cannot be misread.
     * CSS: comments stripped, then class selectors only. Token references are
       `--dmui-*` and are excluded by requiring a `.` before the name.
+    * Jinja: comments stripped, then whatever remains. Templates joined this
+      scope when kernel 0.1.0a97 made the facet declare a shell — before that
+      this assembly shipped no HTML files at all. Extending the scope in the
+      same change that adds the surface is the point: a governance scope that
+      is not widened alongside the product silently stops covering it.
     """
     src = Path(page.__file__).resolve().parent
     found: set[str] = set()
@@ -77,7 +82,23 @@ def _dmui_names_actually_shipped() -> set[str]:
 
     css = re.sub(r"/\*.*?\*/", "", CSS.read_text(), flags=re.S)
     found |= {name.lstrip(".") for name in re.findall(r"\.dmui-[a-z0-9_-]+", css)}
+
+    for path in src.rglob("*.html"):
+        found |= set(re.findall(r"\bdmui-[a-z0-9_-]+", _template_markup(path)))
     return found
+
+
+def _template_markup(path: Path) -> str:
+    """A template with its Jinja and HTML comments removed.
+
+    Same discipline as the CSS and Python branches: the shell's comment block
+    explains at length that `.dmui-*` belongs to `dotmac-ui` and that this
+    assembly's own markup uses `.dmws-*`, and a scan that read the explanation
+    would make deleting it the cheapest way to pass.
+    """
+    text = path.read_text(encoding="utf-8")
+    text = re.sub(r"\{#.*?#\}", "", text, flags=re.S)
+    return re.sub(r"<!--.*?-->", "", text, flags=re.S)
 
 
 def test_the_workspace_stylesheet_exists_and_is_served() -> None:
@@ -186,3 +207,32 @@ def test_the_namespace_guard_still_bites() -> None:
     assert not re.findall(
         r"\.dmui-[a-z0-9_-]+", css
     ), "the detector still reads CSS comments"
+
+
+def test_the_template_branch_reads_markup_and_not_its_own_explanation() -> None:
+    """The Jinja branch's sensitivity proof, both directions.
+
+    The shell is the only template this assembly ships and it uses no `.dmui-*`
+    class at all — which is exactly the condition under which a branch that
+    matched nothing would pass forever. So prove it sees a real one, and prove
+    it does not see the same name inside the comment that forbids it.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as directory:
+        shipped = Path(directory) / "shipped.html"
+        shipped.write_text('<div class="dmui-invented">x</div>', encoding="utf-8")
+        assert "dmui-invented" in _template_markup(
+            shipped
+        ), "the detector cannot see a class in shipped markup"
+
+        prose = Path(directory) / "prose.html"
+        prose.write_text(
+            "{#- never invent a dmui-invented class -#}\n"
+            "<!-- nor a dmui-invented one here -->\n<p>x</p>",
+            encoding="utf-8",
+        )
+        assert "dmui-invented" not in _template_markup(prose), (
+            "the detector still reads the comment explaining the invariant, so "
+            "the cheapest way to satisfy it is to delete the explanation"
+        )

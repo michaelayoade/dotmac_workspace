@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import re
 import tomllib
 from pathlib import Path
 
@@ -43,12 +44,53 @@ def test_every_workspace_audit_writer_names_the_actor_pair() -> None:
     assert not problems, f"non-canonical audit actor callers: {problems}"
 
 
+#: The kernel release that began REFUSING to derive an audit actor, making the
+#: explicit `actor_type`/`actor_id` call sites above load-bearing rather than
+#: decorative.
+STRICT_ACTOR_KERNEL = "0.1.0a70"
+
+#: What this guard understands. The kernel has never left the `0.1.0aN` alpha
+#: series, and comparing serials within it is exact. Anything else — `0.1.0`
+#: final, a `b`/`rc` pre-release, `0.1.1`, `0.2.0` — is NOT ordered correctly by
+#: an integer compare on the alpha serial, so this refuses to guess.
+_ALPHA_SERIES = re.compile(r"^0\.1\.0a(\d+)$")
+
+
 def test_workspace_pins_the_kernel_that_refuses_actor_derivation() -> None:
-    """The explicit callers and the strict callee land as one adoption."""
+    """The explicit callers and the strict callee never come apart.
+
+    A FLOOR within the alpha series, not a snapshot and not a general version
+    comparison. It was an equality assertion against `0.1.0a70` and failed the
+    first kernel bump with `assert '0.1.0a97' == '0.1.0a70'` — a message about
+    the pin moving, which says nothing about actor derivation.
+
+    The guarantee, stated narrowly because that is what it is: while the kernel
+    remains on `0.1.0aN`, the pin never drops below the release that made the
+    callee strict, which would leave the explicit callers guarding a kernel that
+    still derives actors silently. A real PEP 440 comparison would need
+    `packaging`, which this repository does not declare — it is a transitive
+    dev-only package, and importing one in a guard is how a guard starts
+    erroring in an environment nobody tested. So when the kernel leaves the
+    alpha series this FAILS LOUDLY and asks to be updated, rather than
+    mis-ordering `0.1.0` above `0.1.0a70` and passing for the wrong reason.
+    """
     dependencies = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["tool"][
         "poetry"
     ]["dependencies"]
-    assert dependencies["dotmac-kernel"]["version"] == "0.1.0a70"
+    pinned = dependencies["dotmac-kernel"]["version"]
+
+    pinned_match = _ALPHA_SERIES.match(pinned)
+    floor_match = _ALPHA_SERIES.match(STRICT_ACTOR_KERNEL)
+    assert floor_match is not None
+    assert pinned_match is not None, (
+        f"kernel pinned at {pinned!r}, which is outside the 0.1.0aN alpha series "
+        "this guard can order. Compare PEP 440 versions properly here (and "
+        "declare the dependency that does it) before bumping past the alphas."
+    )
+    assert int(pinned_match.group(1)) >= int(floor_match.group(1)), (
+        f"kernel pinned at {pinned!r}, below {STRICT_ACTOR_KERNEL} which is "
+        "where the kernel stopped deriving audit actors"
+    )
 
 
 def test_actor_guard_ignores_prose_that_only_names_the_writer() -> None:

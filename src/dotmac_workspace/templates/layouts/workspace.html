@@ -1,0 +1,73 @@
+{#-
+  The Workspace portal's SHELL — the document every browser page in this plane
+  is served inside, and the template `staff_admin` names in `assembly.py`.
+
+  ## Why this file exists at all
+
+  Kernel 0.1.0a97 makes a browser facet declare its shell as a real template
+  reference, and `create_app` resolves it at BOOT (`validate_template_names`)
+  rather than on a first request — so a facet cannot name a shell that is not
+  there. This assembly had no Jinja at all before a97: its one shell is
+  `dotmac_workspace.page.render_page`, which composes the same document as an
+  f-string.
+
+  ## Two spellings, one document, and a guard that keeps them the same
+
+  Nothing here supersedes `page.py`. `render_page` is still what every route
+  calls, and adopting a97 deliberately did not rewrite three web modules to
+  thread a `Request` into the kernel's `render()` — that would have been a
+  surface rewrite riding along on a dependency bump.
+
+  So there are, for now, two spellings of one document, and `page.py`'s own
+  docstring names exactly that hazard: "What it must NOT be is two hand-written
+  shells, because the thing they carry is not decoration." The `<script>` tags
+  below ARE that thing — `static/js/csrf.js` copies the `csrf_token` cookie onto
+  the `X-CSRF-Token` header that `CSRFMiddleware` validates, and a page that
+  lost them would render mutating controls that silently 403.
+
+  The answer is not to trust the duplication but to make drift impossible:
+  `tests/test_web_facet_shell.py` renders this template and `render_page` with
+  the same inputs and requires the two documents to agree. Change one without
+  the other and the build fails.
+
+  ## The stylesheet cascade
+
+  `stylesheets` when a caller supplies one — which is every render this plane
+  performs, since `page.py` hands it `page.stylesheets()` through the
+  equivalence guard. The `surface.stylesheets` fallback is the kernel's own
+  per-request cascade, fed from `ProductAssemblySpec.stylesheets`; this assembly
+  leaves that slot EMPTY on purpose (see `assembly.py`), so the fallback
+  currently resolves to nothing and no page takes it.
+
+  The supplied cascade is two links in this order: `dotmac-ui`'s compiled
+  stylesheet first, so its `--dmui-*` tokens are defined, then this assembly's
+  `.dmws-*` rules, which are written entirely in terms of them. Order is
+  load-bearing — reversed, every rule in the second file resolves to nothing and
+  the page renders unstyled with no error anywhere.
+
+  ## The `body` block
+
+  Declared as a block so a later contract-v2 surface can `{% extends %}` this
+  file instead of composing markup in Python. `body` is composed markup rather
+  than text, and is marked safe for that reason: every value interpolated into
+  it is escaped at the point of interpolation — see `launcher.web._tile`,
+  `operator.web._notice` and `identity.web._refusal`, each of which calls
+  `html.escape` on the values it receives. `title` is NOT marked safe and is
+  autoescaped by Jinja, exactly as `page.py` escapes it explicitly.
+-#}
+{%- set sheets = stylesheets if stylesheets is defined else surface.stylesheets -%}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}{{ title }}{% endblock %} — DotMac Workspace</title>
+{% for href in sheets %}<link rel="stylesheet" href="{{ href }}">
+{% endfor %}
+<script src="/static/js/htmx.min.js" defer></script>
+<script src="/static/js/csrf.js" defer></script>
+</head>
+<body class="dmws-body">
+<main class="dmws-main">{% block body %}{{ body | safe }}{% endblock %}</main>
+</body>
+</html>
