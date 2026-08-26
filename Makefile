@@ -29,10 +29,21 @@ TEST_APP_DSN = postgresql+psycopg://$(TEST_DB_USER):$(TEST_DB_PASSWORD)@$(TEST_D
 # Inspecting the graph needs no database, so the URL is a placeholder knob.
 GRAPH_DATABASE_URL ?= postgresql+psycopg://unused:unused@127.0.0.1:1/unused
 
+# The nginx site in front of this plane. `deploy/nginx/workspace.conf.template`
+# is the SOURCE; the file under /etc/nginx on the host is a rendered artifact.
+# envsubst is restricted to these two names on purpose — unrestricted it would
+# also substitute nginx's own $host/$scheme/$remote_addr and emit a config
+# that proxies with empty headers.
+NGINX_PUBLIC_HOST ?= workspace.dotmac.io
+NGINX_UPSTREAM ?= http://127.0.0.1:8000
+NGINX_TEMPLATE ?= deploy/nginx/workspace.conf.template
+NGINX_SSH ?= root@$(NGINX_PUBLIC_HOST)
+NGINX_SITE ?= /etc/nginx/sites-available/$(NGINX_PUBLIC_HOST)
+
 .DEFAULT_GOAL := help
 
 .PHONY: help check lint format type-check test test-db dev migrate migrate-graph \
-	test-db-up test-db-down from-wheel-boot
+	test-db-up test-db-down from-wheel-boot nginx-render nginx-diff
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -80,3 +91,16 @@ migrate: ## Compose all three lineages and upgrade
 
 migrate-graph: ## Show the composed revision graph (all three lineages)
 	$(PYTHON) python -c "from alembic import command; from dotmac_workspace.migrations import make_alembic_config; import os; command.history(make_alembic_config(os.environ.get('MIGRATION_DATABASE_URL') or '$(GRAPH_DATABASE_URL)'))"
+
+nginx-render: ## Render the nginx vhost from its tracked template
+	@WORKSPACE_PUBLIC_HOST='$(NGINX_PUBLIC_HOST)' WORKSPACE_UPSTREAM='$(NGINX_UPSTREAM)' \
+		envsubst '$${WORKSPACE_PUBLIC_HOST} $${WORKSPACE_UPSTREAM}' < $(NGINX_TEMPLATE)
+
+nginx-diff: ## Fail if the deployed vhost has drifted from the tracked template
+	@$(MAKE) --no-print-directory nginx-render > /tmp/workspace-nginx-rendered.conf
+	@ssh -o BatchMode=yes $(NGINX_SSH) 'cat $(NGINX_SITE)' > /tmp/workspace-nginx-deployed.conf
+	@if diff -u /tmp/workspace-nginx-rendered.conf /tmp/workspace-nginx-deployed.conf; then \
+		echo "nginx vhost matches $(NGINX_TEMPLATE)"; \
+	else \
+		echo "DRIFT: the deployed vhost differs from the tracked template" >&2; exit 1; \
+	fi

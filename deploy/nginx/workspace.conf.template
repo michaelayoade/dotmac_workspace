@@ -1,0 +1,81 @@
+# TLS terminator and reverse proxy for the Workspace plane.
+#
+# This file is the SOURCE. The copy under /etc/nginx/sites-available on the
+# host is a rendered artifact, and `make nginx-diff` exists to prove the two
+# have not drifted. Editing the host copy directly is how the last set of
+# security-header fixes came within one rsync of being lost.
+#
+# Render with `make nginx-render` (or the envsubst line in deploy/nginx/README.md).
+# envsubst is deliberately restricted to the two placeholders below —
+# unrestricted, it would also eat nginx's own $host, $scheme, $remote_addr and
+# $proxy_add_x_forwarded_for and produce a config that silently proxies with
+# empty headers.
+#
+# Placeholders (named without the brace syntax here on purpose — envsubst would
+# otherwise rewrite this documentation into the values it describes):
+#   WORKSPACE_PUBLIC_HOST  the public hostname; also names the certificate paths
+#   WORKSPACE_UPSTREAM     where the app is published, e.g. http://127.0.0.1:8000
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${WORKSPACE_PUBLIC_HOST};
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    location / { return 301 https://$host$request_uri; }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${WORKSPACE_PUBLIC_HOST};
+
+    ssl_certificate     /etc/letsencrypt/live/${WORKSPACE_PUBLIC_HOST}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${WORKSPACE_PUBLIC_HOST}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_tickets off;
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    ssl_trusted_certificate /etc/letsencrypt/live/${WORKSPACE_PUBLIC_HOST}/chain.pem;
+
+    # HSTS stays HERE as well as in the app: nginx answers 502/504 itself when
+    # the upstream is down, and those responses must still carry it. The value
+    # matches the application's so the two cannot disagree — a browser uses the
+    # FIRST HSTS header it sees, so a weaker value here would have silently won.
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+
+    # X-Content-Type-Options and X-Frame-Options are deliberately NOT set here.
+    # The application sets both, with identical values, on every response it
+    # serves; duplicating them only produced repeated headers.
+
+    # No referrer: a callback URL carries an authorization code, and a referrer
+    # header would hand it to whatever the page links to next.
+    #
+    # This one IS kept, and it is deliberately stricter than the application's
+    # `strict-origin-when-cross-origin`. Both are sent, and for Referrer-Policy
+    # a browser takes the LAST valid value — which is this one, because
+    # `add_header` appends after the upstream's. Do not reorder or remove it
+    # without changing the application's value first: dropping it would widen
+    # referrer exposure on exactly the OIDC callback this protects.
+    add_header Referrer-Policy "no-referrer" always;
+
+    location / {
+        proxy_pass ${WORKSPACE_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        # Decides whether session and ceremony cookies carry Secure — but only
+        # if uvicorn TRUSTS this proxy. See FORWARDED_ALLOW_IPS in
+        # docker-compose.yml: the peer it sees is the Docker bridge gateway,
+        # not loopback, however this proxy addressed it.
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header X-Forwarded-Port  443;
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 60s;
+        proxy_buffering off;
+    }
+}
