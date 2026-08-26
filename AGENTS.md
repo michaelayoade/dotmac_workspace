@@ -47,6 +47,31 @@ declines every control the kernel performs inside `create_app` — academy shipp
 a tenant lockdown that was configured, asserted in config validation, and never
 armed. Reading a kernel setting is not adopting the behaviour behind it.
 
+## 3a. The browser surface is DECLARED, in `assembly.py`, and nowhere else
+
+Kernel `0.1.0a97` makes a browser facet typed and refuses to compose one it has
+to infer. The rules, each pinned by `tests/test_web_facet.py`:
+
+- The facet code is `staff_admin`. It is the only code the v1 adapter accepts,
+  not a name this repository chooses.
+- The authentication profile names `dmws_session`. Never bind the kernel's
+  `TENANT_COOKIE_AUTHENTICATION`; it reads `access_token`, which this assembly
+  never sets.
+- `admission_permission` is a coarse boundary and does NOT replace the five
+  per-route permission codes. Collapsing them into it grants every admitted
+  member `workspace.identity.manage`.
+- `/logout` is an entry route. It keeps `require_workspace_auth` and escapes
+  only facet admission, so a member without `workspace.portal.access` can still
+  leave.
+- `url_prefix` is a reservation, not a route prefix, and may not be `/`.
+- The facet's shell is `templates/layouts/workspace.html`, and it is currently
+  the second spelling of the document `page.render_page` composes — a bypass of
+  `page.py`'s one-shell rule, recorded as CE-001 in `docs/CONTROL_EXCEPTIONS.md`
+  and held from drifting by `tests/test_web_facet_shell.py`.
+
+Why each rule exists, and what breaks quietly without it, is in `README.md`
+§ "The browser facet".
+
 ## 4. Never re-implement token validation, and never re-implement authorization
 
 `dotmac_kernel.deps.authenticate_request` is the one seam for *who are you?*.

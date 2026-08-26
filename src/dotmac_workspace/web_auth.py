@@ -45,9 +45,15 @@ launcher's guard alike.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from dotmac_kernel.deps import authenticate_request, get_db
 from dotmac_kernel.models import Party
 from dotmac_kernel.web_deps import WebAuthRedirect
+from dotmac_kernel.web_surfaces import (
+    BrowserAuthenticationProvider,
+    BrowserCredentialTransport,
+)
 from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
@@ -72,4 +78,39 @@ def require_workspace_auth(request: Request, db: Session = Depends(get_db)) -> P
     return party
 
 
-__all__ = ["require_workspace_auth"]
+class WorkspaceCookieAuthentication(BrowserAuthenticationProvider):
+    """The typed binding kernel 0.1.0a97's facet contract asks the assembly for.
+
+    It adds NO behaviour. It is the declaration that the Workspace's browser
+    audience is authenticated by a cookie session, and that the dependency which
+    answers "who are you?" is the one seam above — so the kernel's facet runtime
+    reaches `require_workspace_auth`, and through it
+    `dotmac_kernel.deps.authenticate_request`, exactly as every route already
+    does.
+
+    The alternative the kernel ships, `web_deps.TENANT_COOKIE_AUTHENTICATION`,
+    is WRONG here for the reason this whole module exists: it reads a cookie
+    named `access_token`, which is what every product data plane's portal reads.
+    Binding it would make ADR-0021 §1's containment a deployment coincidence
+    again, and it would do so silently — the facet would authenticate, just
+    against a cookie this assembly never sets, so every member would appear
+    signed out. Naming the provider here keeps the cookie's name and the guard
+    that reads it in one place.
+    """
+
+    transport = BrowserCredentialTransport.COOKIE_SESSION
+
+    @property
+    def dependency(self) -> Callable[..., object]:
+        return require_workspace_auth
+
+
+#: The instance `assembly.py` binds into the `staff_admin` facet's profile.
+WORKSPACE_COOKIE_AUTHENTICATION = WorkspaceCookieAuthentication()
+
+
+__all__ = [
+    "WORKSPACE_COOKIE_AUTHENTICATION",
+    "WorkspaceCookieAuthentication",
+    "require_workspace_auth",
+]

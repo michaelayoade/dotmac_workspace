@@ -56,11 +56,17 @@ services:
       # closed — an empty value here is not "allow all", it is "serve nobody".
       TRUSTED_HOSTS: ${TRUSTED_HOSTS:?an unset trusted-host list serves nobody}
       PLATFORM_ROOT_DOMAIN: ${PLATFORM_ROOT_DOMAIN:?required}
-      # Both are secrets and both come from the environment file, never from a
-      # default: a compose default for a signing key is a production key that
-      # everybody who has read the repository already knows.
+      # All three are secrets and all three come from the environment file,
+      # never from a default: a compose default for a signing key is a
+      # production key that everybody who has read the repository already knows.
       JWT_SECRET: ${JWT_SECRET:?no default is acceptable for a signing key}
       SESSION_HASH_SECRET: ${SESSION_HASH_SECRET:?no default is acceptable for a session hash key}
+      # Fatal in production since kernel 0.1.0a97, and absent from this file
+      # before it — so a production start would have carried the kernel's own
+      # dev sentinel. At least 32 bytes, and DISTINCT from the two above: one
+      # value serving as both a session key and a CSRF key means a single
+      # compromise forges both.
+      CSRF_SECRET: ${CSRF_SECRET:?no default is acceptable for a CSRF signing key}
 
       # ── the identity provider ───────────────────────────────────────────
       WORKSPACE_OIDC_ISSUER: ${WORKSPACE_OIDC_ISSUER:?no provider means no login}

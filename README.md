@@ -203,6 +203,46 @@ application.
 
 Deferring a module is cheap. Unpicking a wire format in the field is not.
 
+## The browser facet
+
+Kernel `0.1.0a97` replaced an inferred browser surface with a declared one.
+Before it, the three manifests carrying `web_routers` were mounted behind an
+authentication policy the kernel picked on their behalf; a97 refuses to compose
+a surface it would have to guess at, so `assembly.py` now declares one facet
+explicitly. The enforceable rules are `AGENTS.md` §3a. This section is why each
+one exists, because every failure below is quiet.
+
+**The profile names `dmws_session`.** Binding the kernel's shipped
+`TENANT_COOKIE_AUTHENTICATION` would authenticate correctly — against
+`access_token`, a cookie this assembly never sets. Every member would appear
+signed out, and the containment this plane keeps (§ "The invariant this
+repository exists to keep") would quietly become a deployment coincidence rather
+than a property of the code.
+
+**Admission is coarse; the per-route codes stay.** `workspace.portal.access`
+says the portal is a different place from the JSON API. It does not say what a
+member may do once inside. The five narrower codes still guard what they
+guarded, and folding them into admission would hand every admitted member
+`workspace.identity.manage`.
+
+**`/logout` is an entry route.** That is not a loosening — it keeps
+`require_workspace_auth`. What it escapes is facet *admission*, because a member
+holding a session but not holding `workspace.portal.access` would otherwise be
+able neither to enter nor to leave. `identity/feature.py` refuses that
+"trapped in a session" outcome, and this preserves the refusal.
+
+**`url_prefix` is a reservation, not a route prefix.** The v1 adapter mounts
+legacy routers at `""` (`prefix="" if surface.legacy` in the kernel's
+`web_runtime`), so `/login`, `/applications` and `/operator/...` are untouched
+by it. It cannot be `/`, because the kernel refuses two facets whose scopes
+contain one another and `/` contains the `/platform` facet `create_app` composes
+by default — Workspace serves eleven live `/platform/*` routes. The prefix
+therefore reserves a namespace for the eventual contract-v2 migration and
+describes nothing today.
+
+Adopting the policy did not migrate any URL: `tests/test_route_table_compatibility.py`
+pins the constructed route table so a future change cannot move one silently.
+
 ## Composition
 
 ```python

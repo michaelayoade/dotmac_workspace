@@ -22,6 +22,24 @@ Everything is served from `/static`, which `create_app` mounts from the
 kernel's packaged assets. Nothing is inline, nothing is remote: the kernel's
 default Content-Security-Policy is `script-src 'self'`, and an inline handler
 here would be a policy exception argued for by a button.
+
+## The second spelling, and why it is not a second shell
+
+Kernel 0.1.0a97 requires a declared web facet to name its shell as a real
+TEMPLATE, resolved at boot. `templates/layouts/workspace.html` is that template,
+and it composes the same document this function does.
+
+That is the duplication the paragraph above forbids, so it is not left on trust:
+`tests/test_web_facet_shell.py` renders both with the same inputs and requires
+them to agree, link for link and script for script. The stylesheet cascade is
+not duplicated at all — `stylesheets()` below is the one source, read by this
+function and, through `ProductAssemblySpec.stylesheets`, by the template.
+
+The honest alternative was to delete this function and route every page through
+`dotmac_kernel.templating.render()`. It was not taken here because `render()`
+needs a `Request` that `_refusal`, `launcher.web._page` and `operator.web._shell`
+do not currently take — a three-module surface rewrite riding along on a
+dependency bump. The guard makes deferring it safe rather than merely cheap.
 """
 
 from __future__ import annotations
@@ -46,7 +64,28 @@ _CSRF_BRIDGE: Final[str] = "/static/js/csrf.js"
 #:   `.dmui-table` here would be claiming a name the design system owns.
 #: * A raw colour here would be a second, private design system that silently
 #:   stops matching the fleet the first time a token is retuned.
-_WORKSPACE_CSS: Final[str] = "/static/css/workspace.css"
+#:
+#: PUBLIC (it lost its underscore when kernel 0.1.0a97 arrived) because the
+#: assembly now has to name the same two links a second time: a declared web
+#: facet carries a shell TEMPLATE, and the kernel renders that shell from
+#: `ProductAssemblySpec.stylesheets` rather than from this module. Exporting the
+#: constant is what keeps "the cascade this plane serves" a single value instead
+#: of a URL written down in two files — see `assembly.py` and
+#: `templates/layouts/workspace.html`.
+WORKSPACE_CSS: Final[str] = "/static/css/workspace.css"
+
+
+#: The cascade every Workspace page loads, in order. `dotmac-ui`'s compiled
+#: stylesheet FIRST, because `workspace.css` is written entirely in terms of the
+#: `--dmui-*` tokens it defines and resolves to nothing without it.
+#:
+#: Not a constant, because `dotmac_ui.stylesheet_url()` carries a content digest
+#: that changes with the installed package version — computing it once at import
+#: would pin a checkout's asset URL into anything that imported this module
+#: early.
+def stylesheets() -> tuple[str, ...]:
+    """The `<link>` cascade, for `page.py` and the assembly spec alike."""
+    return (dotmac_ui.stylesheet_url(), WORKSPACE_CSS)
 
 
 def render_page(*, title: str, body: str) -> str:
@@ -59,13 +98,13 @@ def render_page(*, title: str, body: str) -> str:
     given as MARKUP, so a caller that forgets to escape a value has made the
     mistake in a place a reader is looking for it.
     """
+    links = "".join(f'<link rel="stylesheet" href="{href}">' for href in stylesheets())
     return (
         "<!doctype html>"
         '<html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{html.escape(title)} — DotMac Workspace</title>"
-        f'<link rel="stylesheet" href="{dotmac_ui.stylesheet_url()}">'
-        f'<link rel="stylesheet" href="{_WORKSPACE_CSS}">'
+        f"{links}"
         f'<script src="{_HTMX}" defer></script>'
         f'<script src="{_CSRF_BRIDGE}" defer></script>'
         "</head>"
@@ -73,4 +112,9 @@ def render_page(*, title: str, body: str) -> str:
     )
 
 
-__all__ = ["render_page"]
+#: The facet shell that must stay equivalent to `render_page`. Named here, next
+#: to the function it mirrors, so `assembly.py`'s `TemplateRef` and the guard in
+#: `tests/test_web_facet_shell.py` cannot name different files.
+SHELL_TEMPLATE: Final[str] = "layouts/workspace.html"
+
+__all__ = ["SHELL_TEMPLATE", "WORKSPACE_CSS", "render_page", "stylesheets"]
