@@ -43,12 +43,32 @@ def test_every_workspace_audit_writer_names_the_actor_pair() -> None:
     assert not problems, f"non-canonical audit actor callers: {problems}"
 
 
+#: The kernel release that began REFUSING to derive an audit actor, making the
+#: explicit `actor_type`/`actor_id` call sites above load-bearing rather than
+#: decorative.
+STRICT_ACTOR_KERNEL_SERIAL = 70
+
+
 def test_workspace_pins_the_kernel_that_refuses_actor_derivation() -> None:
-    """The explicit callers and the strict callee land as one adoption."""
+    """The explicit callers and the strict callee never come apart.
+
+    A FLOOR, not a snapshot. This was an equality assertion against `0.1.0a70`
+    and it failed the first kernel bump — reporting that the pin had moved,
+    which says nothing about actor derivation and is not what this guard is
+    for. What must never happen is the pin dropping BELOW the release that
+    made the callee strict, which would leave the explicit callers guarding
+    a kernel that still derives actors silently.
+    """
     dependencies = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["tool"][
         "poetry"
     ]["dependencies"]
-    assert dependencies["dotmac-kernel"]["version"] == "0.1.0a70"
+    pinned = dependencies["dotmac-kernel"]["version"]
+    prefix, _, serial = pinned.partition("a")
+    assert prefix == "0.1.0", f"unexpected kernel version shape: {pinned!r}"
+    assert int(serial) >= STRICT_ACTOR_KERNEL_SERIAL, (
+        f"kernel pinned at {pinned!r}, below 0.1.0a{STRICT_ACTOR_KERNEL_SERIAL} "
+        "which is where the kernel stopped deriving audit actors"
+    )
 
 
 def test_actor_guard_ignores_prose_that_only_names_the_writer() -> None:

@@ -123,7 +123,15 @@ def test_both_spellings_link_the_same_stylesheet_cascade() -> None:
     cascade = list(page.stylesheets())
     assert cascade[0].startswith("/static/dotmac-ui/")
     assert cascade[1] == page.WORKSPACE_CSS
-    assert tuple(build_spec().stylesheets) == tuple(cascade)
+
+    # The assembly deliberately does NOT re-declare the cascade. Setting
+    # `ProductAssemblySpec.stylesheets` would give it a second source and would
+    # also style the kernel's branded error pages — a real repair, unrelated to
+    # the facet adoption, owed its own change. The shell template reads a
+    # caller-supplied `stylesheets` and only falls back to `surface.stylesheets`,
+    # so an empty slot changes nothing a member sees. Asserting emptiness pins
+    # that decision rather than leaving it to be re-litigated by accident.
+    assert tuple(build_spec().stylesheets) == ()
 
     for document in (
         _render_template(title="t", body="<p>b</p>"),
