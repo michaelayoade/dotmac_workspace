@@ -29,7 +29,9 @@
         "src/dotmac_workspace/session_contract.py",
         "src/dotmac_workspace/launcher/guard.py"
       ],
-      "adapter_paths": ["src/dotmac_workspace/launcher/web.py"],
+      "adapter_paths": [
+        "src/dotmac_workspace/launcher/web.py"
+      ],
       "drift_test_paths": [
         "tests/test_launcher_authorization.py",
         "tests/test_launcher_is_not_authorization.py",
@@ -84,10 +86,35 @@
         "src/dotmac_workspace/migrations.py",
         "src/dotmac_workspace/migration_bindings.py"
       ],
-      "adapter_paths": ["alembic/env.py"],
+      "adapter_paths": [
+        "alembic/env.py"
+      ],
       "drift_test_paths": [
         "tests/db/test_composed_migrations.py",
         "tests/test_assembly_is_a_third_plane.py"
+      ]
+    },
+    {
+      "authority_id": "workspace-member-administration",
+      "subject": "Deciding who is a member of this Workspace and which external subject a member is bound to. This is the plane's most privileged surface: it can add a member, revoke one, bind an external identity to a party, and disable a binding. It decides MEMBERSHIP OF THIS PLANE ONLY - it grants no entry to any target application, mints no target token, and writes no target's grants, because the launcher renders links and each target owns its own authorization (ADR-0021 SS5). The kernel owns the permission arithmetic (deps.authorize_party); this repository owns which permission each route demands and what a refusal looks like.",
+      "protected_resources": [
+        "workspace-membership",
+        "workspace-identity-binding"
+      ],
+      "owner_component": "workspace-member-administration",
+      "owner_implementation": "src/dotmac_workspace/operator/service.py",
+      "decision_interface": "dotmac_workspace.operator.guard",
+      "canonical_writer_paths": [
+        "src/dotmac_workspace/operator/service.py"
+      ],
+      "adapter_paths": [
+        "src/dotmac_workspace/operator/web.py",
+        "src/dotmac_workspace/operator/guard.py",
+        "src/dotmac_workspace/operator/feature.py"
+      ],
+      "drift_test_paths": [
+        "tests/test_operator_routes.py",
+        "tests/test_operator_surface.py"
       ]
     }
   ],
@@ -131,11 +158,24 @@
       "require_public_annotations": true,
       "forbid_any": true,
       "require_immutable_records": true
+    },
+    {
+      "surface_id": "workspace-member-administration-contract",
+      "paths": [
+        "src/dotmac_workspace/operator/service.py",
+        "src/dotmac_workspace/operator/guard.py",
+        "src/dotmac_workspace/operator/web.py"
+      ],
+      "require_public_annotations": true,
+      "forbid_any": true,
+      "require_immutable_records": true
     }
   ],
   "module_declared_vocabularies": [],
   "testing_kit_boundary": {
-    "test_roots": ["tests"],
+    "test_roots": [
+      "tests"
+    ],
     "kit_source_roots": [],
     "conformance_probes": []
   }

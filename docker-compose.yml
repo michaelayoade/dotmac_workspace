@@ -85,6 +85,17 @@ services:
       # `is_secure_request` decides whether the session and ceremony cookies
       # carry `Secure`, and it reads the forwarded scheme. Trusting a proxy
       # that is not actually in front means trusting a header a client can set.
+      #
+      # THE TRAP, and it bit production for nine days: this service is reached
+      # through a PUBLISHED PORT, so the peer address uvicorn sees is the Docker
+      # bridge GATEWAY, not `127.0.0.1` — even when the proxy connects to
+      # `127.0.0.1:8000` on the host. A bare `127.0.0.1` therefore matches
+      # nothing, uvicorn discards `X-Forwarded-Proto`, the app concludes it is
+      # serving plain HTTP, and EVERY cookie — `dmws_session` included — is
+      # issued without `Secure`. It fails silently: the site works perfectly.
+      #
+      # Set this to include the gateway. Find it with:
+      #   docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' <container>
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
 
       ENVIRONMENT: ${ENVIRONMENT:-production}
@@ -94,13 +105,23 @@ services:
     # `/login` is the one route that must work for the Workspace to be useful,
     # and it renders without a session — so it is the honest health check. A
     # `/` that redirected would report healthy while login was broken.
+    #
+    # The probe MUST send a `Host` the app trusts. It reaches the app over
+    # loopback, so the default header would be `127.0.0.1:8000`, which
+    # `TRUSTED_HOSTS` rejects with 400 before routing — and the check then fails
+    # forever while the service is perfectly healthy, which is worse than no
+    # check at all: a permanently-red probe cannot report a real outage. The
+    # host is read from `TRUSTED_HOSTS` rather than written twice, so it stays
+    # correct in every deployment.
     healthcheck:
       test:
         - CMD-SHELL
         - >-
-          python -c "import urllib.request,sys;
-          sys.exit(0 if urllib.request.urlopen(
-          'http://127.0.0.1:8000/login', timeout=5).status == 200 else 1)"
+          python -c "import os,urllib.request,sys;
+          host=os.environ['TRUSTED_HOSTS'].split(',')[0].strip();
+          req=urllib.request.Request('http://127.0.0.1:8000/login',
+          headers={'Host': host});
+          sys.exit(0 if urllib.request.urlopen(req, timeout=5).status == 200 else 1)"
       interval: ${HEALTHCHECK_INTERVAL:-30s}
       timeout: ${HEALTHCHECK_TIMEOUT:-10s}
       retries: ${HEALTHCHECK_RETRIES:-3}
