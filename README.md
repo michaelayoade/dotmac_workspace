@@ -240,6 +240,15 @@ by default — Workspace serves eleven live `/platform/*` routes. The prefix
 therefore reserves a namespace for the eventual contract-v2 migration and
 describes nothing today.
 
+**One shell and one cascade serve product and kernel pages.** Browser adapters
+thread their `Request` into `dotmac_kernel.templating.render()` and select
+`templates/layouts/workspace.html`; no Python function spells a second HTML
+document. The assembly supplies `page.stylesheets()` through
+`ProductAssemblySpec.stylesheets`, so the Workspace shell and kernel-owned
+branded error templates receive the same ordered, self-hosted design-system
+cascade. Removing that slot makes both paths visibly unstyled and fails
+`tests/test_presentation_ownership.py`.
+
 Adopting the policy did not migrate any URL: `tests/test_route_table_compatibility.py`
 pins the constructed route table so a future change cannot move one silently.
 

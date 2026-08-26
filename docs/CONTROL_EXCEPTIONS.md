@@ -17,7 +17,7 @@ repository has learned. Status is one of `OPEN` or `REMEDIATED`.
 
 ---
 
-## CE-001 — the browser shell is written twice · `OPEN`
+## CE-001 — the browser shell was written twice · `REMEDIATED`
 
 **Control.** `src/dotmac_workspace/page.py`'s module docstring: the shell must
 not be "two hand-written shells, because the thing they carry is not
@@ -39,20 +39,19 @@ rewriting three web modules and the tests that call `render_page` directly with
 no app built — a surface rewrite riding along on a dependency bump, which is
 precisely the coupling this adoption set out to avoid.
 
-**Compensating check.** `tests/test_web_facet_shell.py` renders both spellings
-with the same inputs and requires the documents to agree, plus sensitivity
-proofs that the comparison bites. This controls DRIFT. It does not restore the
-control: the rule is one shell, and there are two.
+**Compensating check while open.** `tests/test_web_facet_shell.py` rendered both
+spellings with the same inputs and required the documents to agree, plus
+sensitivity proofs that the comparison bit. That controlled DRIFT. It did not
+restore the control: the rule was one shell, and there were two.
 
-**Remediation condition.** Mark this entry `REMEDIATED` — do not delete it —
-when `page.render_page` is gone and every browser route renders the facet shell
-through
-`dotmac_kernel.templating.render()`. That change is a `Request` threaded through
-the three `_page`/`_shell`/`_refusal` helpers and their tests, and it is worth
-doing on its own footing rather than here. `tests/test_web_facet_shell.py` goes
-with it — an agreement test between one thing and itself is noise.
+**Remediation condition — met 2026-08-26.** `page.render_page` is gone. The
+three `_page`/`_shell`/`_refusal` helpers take `Request` and every full page
+renders `templates/layouts/workspace.html` through
+`dotmac_kernel.templating.render()`. The old agreement test is deleted;
+`tests/test_presentation_ownership.py` now refuses a Python document shell and
+proves the declared cascade reaches the kernel's real error renderer.
 
-**Status.** `OPEN`.
+**Status.** `REMEDIATED` on 2026-08-26.
 **Owner.** Michael (repository owner). Reassign by editing this line; an entry
 whose owner is a role nobody holds is unowned.
 **Opened.** 2026-08-26, adopting kernel 0.1.0a97 (PR #13).

@@ -17,13 +17,16 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from fastapi import Response
+from dotmac_kernel.templating import compose_templates, install_stylesheets
+from fastapi import FastAPI, Request, Response
 
+from dotmac_workspace.assembly import build_spec
 from dotmac_workspace.identity import config, session, web
 from dotmac_workspace.identity.config import ProviderConfig
 from dotmac_workspace.identity.feature import feature
 from dotmac_workspace.launcher import web as launcher_web
 from dotmac_workspace.operator import web as operator_web
+from dotmac_workspace.page import stylesheets
 from dotmac_workspace.session_contract import (
     CALLBACK_PATH,
     LOGIN_PATH,
@@ -46,6 +49,33 @@ CONFIG = ProviderConfig(
 )
 
 
+def _request(path: str = "/") -> Request:
+    """A real request against the presentation contract the assembly declares."""
+    spec = build_spec()
+    compose_templates(assembly_dir=spec.assembly_template_dir)
+    install_stylesheets(spec.stylesheets)
+    app = FastAPI()
+    return Request(
+        {
+            "type": "http",
+            "app": app,
+            "method": "GET",
+            "path": path,
+            "raw_path": path.encode(),
+            "root_path": "",
+            "scheme": "https",
+            "query_string": b"",
+            "headers": [],
+            "client": ("testclient", 50000),
+            "server": ("testserver", 443),
+        }
+    )
+
+
+def _body(response: Response) -> str:
+    return bytes(response.body).decode()
+
+
 def _rendered_pages() -> dict[str, str]:
     """The actual HTML these routes emit.
 
@@ -58,23 +88,30 @@ def _rendered_pages() -> dict[str, str]:
     """
     config.install(CONFIG)
     try:
+        request = _request()
         return {
-            "login": web.login_page(tenant=object(), next_path="").body.decode(),
-            "refusal": web._refusal("no", status_code=403).body.decode(),
-            "launcher": launcher_web._page("<p>none</p>"),
+            "login": _body(web.login_page(request, tenant=object(), next_path="")),
+            "refusal": _body(web._refusal(request, "no", status_code=403)),
+            "launcher": _body(launcher_web._page(request, "<p>none</p>")),
             # The operator screens are covered HERE rather than in a suite of
             # their own. These guards are a governance scope, and a scope that
             # is not extended in the same change that adds a surface is a scope
             # that silently stops covering the product — the exact drift the
             # starter's CLAUDE.md calls out. Both screens carry input controls,
             # which is precisely where a bare form would otherwise appear.
-            "operator_members": operator_web._shell(
-                title="Members",
-                screen=operator_web._members_screen([]),
+            "operator_members": _body(
+                operator_web._shell(
+                    request,
+                    title="Members",
+                    screen=operator_web._members_screen([]),
+                )
             ),
-            "operator_identity": operator_web._shell(
-                title="Identity",
-                screen=operator_web._identity_screen([], issuer="https://idp"),
+            "operator_identity": _body(
+                operator_web._shell(
+                    request,
+                    title="Identity",
+                    screen=operator_web._identity_screen([], issuer="https://idp"),
+                )
             ),
         }
     finally:
@@ -353,6 +390,17 @@ def test_every_page_loads_the_csrf_header_bridge(name: str) -> None:
     html = _rendered_pages()[name]
     assert "/static/js/htmx.min.js" in html
     assert "/static/js/csrf.js" in html
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["login", "refusal", "launcher", "operator_members", "operator_identity"],
+)
+def test_every_page_loads_the_declared_stylesheet_cascade(name: str) -> None:
+    """The real template consumes the assembly-owned cascade in order."""
+    html = _rendered_pages()[name]
+    positions = [html.index(href) for href in stylesheets()]
+    assert positions == sorted(positions)
 
 
 def test_signing_out_is_reachable_from_the_launcher() -> None:

@@ -28,9 +28,11 @@ from uuid import uuid4
 
 import pytest
 from dotmac_kernel.deps import get_db
+from dotmac_kernel.templating import compose_templates, install_stylesheets
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from dotmac_workspace.assembly import build_spec
 from dotmac_workspace.operator import guard, service, web
 
 TENANT = SimpleNamespace(id=uuid4(), slug="acme")
@@ -46,6 +48,9 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     not the authorization those guards perform, which
     `test_operator_surface.py` pins directly and in more detail.
     """
+    spec = build_spec()
+    compose_templates(assembly_dir=spec.assembly_template_dir)
+    install_stylesheets(spec.stylesheets)
     app = FastAPI()
 
     @app.middleware("http")

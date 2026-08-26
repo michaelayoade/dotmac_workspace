@@ -64,10 +64,12 @@ to infer. The rules, each pinned by `tests/test_web_facet.py`:
   only facet admission, so a member without `workspace.portal.access` can still
   leave.
 - `url_prefix` is a reservation, not a route prefix, and may not be `/`.
-- The facet's shell is `templates/layouts/workspace.html`, and it is currently
-  the second spelling of the document `page.render_page` composes — a bypass of
-  `page.py`'s one-shell rule, recorded as CE-001 in `docs/CONTROL_EXCEPTIONS.md`
-  and held from drifting by `tests/test_web_facet_shell.py`.
+- The facet's shell is `templates/layouts/workspace.html`, the ONLY document
+  shell. Browser adapters thread `Request` into
+  `dotmac_kernel.templating.render()`; Python never spells a second document.
+- `ProductAssemblySpec.stylesheets` is the one cascade declaration. The facet
+  shell and kernel-owned branded error templates both consume it. Enforced by
+  `tests/test_presentation_ownership.py`; CE-001 records the retired duplicate.
 
 Why each rule exists, and what breaks quietly without it, is in `README.md`
 § "The browser facet".

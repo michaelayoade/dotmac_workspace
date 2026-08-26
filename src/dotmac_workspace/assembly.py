@@ -77,6 +77,7 @@ from dotmac_workspace.identity.secret_bootstrap import install_workspace_secrets
 from dotmac_workspace.launcher.feature import feature as launcher_feature
 from dotmac_workspace.operator.feature import feature as operator_feature
 from dotmac_workspace.page import SHELL_TEMPLATE
+from dotmac_workspace.page import stylesheets as workspace_stylesheets
 from dotmac_workspace.session_contract import SESSION_COOKIE
 from dotmac_workspace.web_auth import WORKSPACE_COOKIE_AUTHENTICATION
 
@@ -159,19 +160,13 @@ def build_spec() -> ProductAssemblySpec:
         # real template and `create_app` resolves it at boot, so the directory
         # has to be composed for the boot to survive.
         assembly_template_dir=_TEMPLATE_DIR,
-        # The sibling `stylesheets` slot stays deliberately UNSET, as it was
-        # before a97. It feeds a kernel-rendered Jinja global, and every page
-        # this assembly serves is composed by `page.render_page`, which emits
-        # its own `<link>`s from `page.stylesheets()` — the one place that names
-        # the cascade. The shell template reads a caller-supplied `stylesheets`
-        # and only falls back to `surface.stylesheets`, so leaving this empty
-        # changes nothing about what a member sees.
-        #
-        # Setting it WOULD also style the kernel's branded error pages, which
-        # render this cascade and are currently unstyled. That is a real repair
-        # and a real behaviour change, and it is unrelated to adopting a97 — so
-        # it belongs in its own change with its own acceptance, not smuggled in
-        # on a dependency bump.
+        # One cascade, projected through the kernel's published slot. The facet
+        # shell reads it from request-scoped `SurfaceContext`; kernel-owned
+        # branded error templates read the same declaration through
+        # `extra_stylesheets`. This deliberately repairs the previously
+        # unstyled error pages and is pinned by an HTTP-status-preserving render
+        # test rather than being an incidental consequence of shell cleanup.
+        stylesheets=workspace_stylesheets(),
         # ── The interactive browser surface (kernel 0.1.0a97) ────────────────
         #
         # One audience, so one facet. Everything this assembly serves in a

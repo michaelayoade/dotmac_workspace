@@ -114,12 +114,11 @@ def test_the_design_system_is_composed() -> None:
     assert dotmac_ui.static_dir() in tuple(build_spec().packaged_static_dirs)
 
 
-def test_every_page_links_the_design_system_stylesheet() -> None:
-    html = page.render_page(title="t", body="<p>b</p>")
-    assert dotmac_ui.stylesheet_url() in html, (
-        "the shell does not link dotmac-ui's stylesheet, so no token resolves "
-        "and every rule in workspace.css falls back to nothing"
-    )
+def test_the_assembly_declares_the_complete_stylesheet_cascade() -> None:
+    """The kernel projects this one declaration into pages and errors alike."""
+    assert tuple(build_spec().stylesheets) == page.stylesheets()
+    assert page.stylesheets()[0] == dotmac_ui.stylesheet_url()
+    assert page.stylesheets()[1] == page.WORKSPACE_CSS
 
 
 def test_no_raw_colour_survives_in_the_workspace_stylesheet() -> None:
