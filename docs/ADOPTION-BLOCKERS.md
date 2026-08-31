@@ -326,3 +326,62 @@ both halves.
 Cleared 2026-08-12. The dependency declared `extras = ["testing"]`, pulling the
 kernel's test kit into the **runtime** dependency set for tests that never used
 it. Removed — an unused extra is surface a deployment carries and nobody checks.
+
+## B7 — The Governance pin cannot advance until ADR 0014 is adopted
+
+**Open, raised 2026-08-31.** Bumping `.dotmac/standards-profile.json` and
+`.github/workflows/engineering-standards.yml` from `fbd47b89` to `11478a2` is
+not a pin bump. The engine's profile schema goes from **version 5 to version
+10**, and two top-level blocks become REQUIRED:
+
+- `external_connector_surface` — ADR 0011 (Accepted 2026-08-14). Declared with
+  all six baselines at `0` and no conserved exclusions. The engine measured the
+  tree and agreed, so this is a verified fact rather than a convenient one, and
+  the baseline is a two-directional ratchet: growing a connector fails the gate,
+  and so does declaring one that does not exist.
+- `deployment_artefact_surfaces` — ADR 0014 (Accepted 2026-08-29). Declared as
+  the one surface this repository actually deploys.
+
+Declaring that surface honestly makes the gate report two errors, and **both are
+correct**:
+
+    deployment.image.not-pinned  docker-compose.yml:29
+    deployment.render-check.absent  .github/workflows/ci.yml
+
+**1. The deployed image is resolved at deploy time.** `docker-compose.yml` names
+`${WORKSPACE_IMAGE:-…}:${WORKSPACE_TAG:-latest}`, and `docs/PILOT-RUNBOOK.md`
+step 4 runs `docker compose up -d workspace` against it. ADR 0014 § 3 requires
+the artefact to carry an exact `@sha256:` digest. This is the failure the record
+opens with — seven observability images pinned to `:latest`, where what ran
+yesterday and what runs after the next restart are two deployments with one
+description. It is a real finding about how this Workspace deploys, not a
+labelling problem, and correcting it changes the deploy model.
+
+**2. There is no byte-comparison render check.** `make nginx-diff` compares the
+tracked template against the file on the host over SSH; it cannot run in CI, and
+a check that reads the target host is the thing ADR 0014 replaces. The obvious
+repair — commit a rendered vhost and diff it in CI — collides with § 4, which
+forbids the artefact to carry a production endpoint or host identity, and the
+rendered vhost carries `workspace.dotmac.io`. The two halves have to be settled
+together.
+
+**Two workarounds exist and both are refused.** `acknowledged_non_deployments`
+would let the deployment go unmentioned, which is the vacuous pass the detector
+was written against. `enforcement_mode: candidate` would keep the pin current by
+switching the gate off, which is worse than the stale pin — a governance model in
+name only, the same defect § 9 of `AGENTS.md` names.
+
+The real shape of this work is adopting ADR 0014's artefact model, which for a
+compose-on-a-host deployment means `dotmac-deployment-foundation`. That is a
+deliberate programme, and it is Michael's decision, not a side effect of
+refreshing a revision string.
+
+**What was verified while raising this**, so the next attempt does not re-derive
+it: the pinned action runs `tools/dotmac-standards` → `standards_control` and
+nothing else. `standards_control` imports only its own modules and the standard
+library — never `gate_control`, `programme_control`, `tools/check_receipts.py`
+or `tools/check_commit_identity.py`. Every one of the 23 diagnostic codes the
+bump adds belongs to the `connector.*` (ADR 0011) or `deployment.*` (ADR 0014)
+family, both **Accepted**. **No Proposed record is enforced against this
+repository**, so there is no Governance defect here to repair — the blocker is
+Workspace's, and it is an honest one.
