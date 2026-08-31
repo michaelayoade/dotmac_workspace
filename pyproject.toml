@@ -180,6 +180,12 @@ ignore = [
 # masquerade as a policy.
 "tests/**" = ["S101", "S105", "S106", "S608"]
 
+[tool.ruff.lint.isort]
+# `effective_privileges` is this repository's own test helper (`tests/db`), not
+# a distribution. Declaring it keeps the corrected isolation method in the
+# first-party block, where a reader looks for it.
+known-first-party = ["dotmac_workspace", "effective_privileges"]
+
 [tool.mypy]
 python_version = "3.12"
 ignore_missing_imports = true

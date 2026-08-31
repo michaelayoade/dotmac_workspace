@@ -237,6 +237,24 @@ same ceremony and asserts that exactly one consumed it, and
 `tests/db/test_login_state_isolation.py`, which proves the tenant boundary on
 `workspace_login_states` through the ONLINE role.
 
+Its two privilege assertions were **corrected on 2026-08-31**. They answered
+*can this role reach that table?* with `information_schema.table_privileges`,
+which enumerates DIRECT grants only — a role reaching the table through a role
+membership reads as holding nothing, so a passing assertion was compatible with
+a genuinely reachable table. Governance **ADR 0022 § 3 property 9** (Accepted
+2026-08-30) now requires effective TABLE OR COLUMN privileges across all seven
+table privileges, and that is what those assertions ask
+(`tests/db/effective_privileges.py`). `tests/db/test_effective_privilege_method.py`
+plants a reach that exists only through a membership and observes both halves —
+the old method missing it, the new one refusing it —
+and `tests/test_isolation_proof_method.py` fails the build if the listing
+returns. AGENTS.md § 2a is the rule.
+
+That correction is scoped to the METHOD. **No ADR 0022 recovery conformance is
+claimed for this repository**, and none was claimed before: the rehearsed-restore
+programme — the thirteen-part `PostgresRecoveryBundleV1`, the fresh-instance
+rehearsal, the per-property verdict — is not implemented here.
+
 The acceptance rule remains:
 
 1. **Results, not files.** Every property proven by `tests/db` remains proven
