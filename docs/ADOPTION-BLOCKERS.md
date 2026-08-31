@@ -385,3 +385,46 @@ bump adds belongs to the `connector.*` (ADR 0011) or `deployment.*` (ADR 0014)
 family, both **Accepted**. **No Proposed record is enforced against this
 repository**, so there is no Governance defect here to repair — the blocker is
 Workspace's, and it is an honest one.
+
+### The precedent, and why it does not rescue this repository yet
+
+`dotmac_starter_mt` is already on schema 10 (pin `4f80bd16`) and is the only
+repository in the fleet that is. Its `docker-compose.yml` has the identical
+defect — `image: ${APP_IMAGE:?…}`, resolved at deploy time — and it stays green
+by listing that file under `acknowledged_non_deployments` with the
+non-conformance written into the reason:
+
+> acknowledged rather than declared because declaring it would assert it
+> conforms, and it does not: it resolves images through `${...}` substitution,
+> which ADR 0014 counts as unpinned.
+
+So the acknowledgement list is not only for files that merely resemble a
+deployment. It legitimately carries a LEGACY deployment that a conforming one is
+replacing, provided the reason states the non-conformance and names the gate
+that removes the row.
+
+**Starter can do that because it has somewhere to point.** Its declared surface
+is `deploy/product.toml` with three rendered assets and a real
+`render --check` workflow — `dotmac-deployment-foundation`. The acknowledgement
+covers the old path while the new one carries the property.
+
+This repository has no conforming surface at all. Acknowledging
+`docker-compose.yml` here would not be deferring a retirement; it would leave
+`deployment_artefact_surfaces` describing nothing this repository deploys, which
+is the vacuous pass in its purest form — and `declaration_paths` requires at
+least one entry, so the surface would have to name something that is not the
+deployment in order to exist.
+
+**The unblock is therefore concrete rather than a judgement call:** adopt
+`dotmac-deployment-foundation` here — `deploy/product.toml`, rendered assets
+under version control, and a `render --check` job — and then acknowledge
+`docker-compose.yml` as the legacy path being retired, in the same shape Starter
+uses. That also disposes of `deployment.render-check.absent`, because
+`render --check` is a byte comparison that runs in CI and never reads the target
+host, which the SSH-based `make nginx-diff` cannot be.
+
+**This is not a Workspace-shaped problem.** Measured 2026-08-31, no other
+enrolled repository digest-pins its compose images either — Sub 22 image lines,
+ERP 6, Integrator 2, Starter 1, all zero pinned — and all four are still on
+schema 9. Each will meet this same wall on its own move to schema 10. Workspace
+is simply the first to look.
