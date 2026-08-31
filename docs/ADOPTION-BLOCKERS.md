@@ -326,3 +326,183 @@ both halves.
 Cleared 2026-08-12. The dependency declared `extras = ["testing"]`, pulling the
 kernel's test kit into the **runtime** dependency set for tests that never used
 it. Removed — an unused extra is surface a deployment carries and nobody checks.
+
+## B7 — The Governance pin cannot advance until ADR 0014 is adopted
+
+**Open, raised 2026-08-31.** Bumping `.dotmac/standards-profile.json` and
+`.github/workflows/engineering-standards.yml` from `fbd47b89` to `11478a2` is
+not a pin bump. The engine's profile schema goes from **version 5 to version
+10**, and two top-level blocks become REQUIRED:
+
+- `external_connector_surface` — ADR 0011 (Accepted 2026-08-14). Declared with
+  all six baselines at `0` and no conserved exclusions. The engine measured the
+  tree and agreed, so this is a verified fact rather than a convenient one, and
+  the baseline is a two-directional ratchet: growing a connector fails the gate,
+  and so does declaring one that does not exist.
+- `deployment_artefact_surfaces` — ADR 0014 (Accepted 2026-08-29). Declared as
+  the one surface this repository actually deploys.
+
+Declaring that surface honestly makes the gate report two errors, and **both are
+correct**:
+
+    deployment.image.not-pinned  docker-compose.yml:29
+    deployment.render-check.absent  .github/workflows/ci.yml
+
+**1. The deployed image is resolved at deploy time.** `docker-compose.yml` names
+`${WORKSPACE_IMAGE:-…}:${WORKSPACE_TAG:-latest}`, and `docs/PILOT-RUNBOOK.md`
+step 4 runs `docker compose up -d workspace` against it. ADR 0014 § 3 requires
+the artefact to carry an exact `@sha256:` digest. This is the failure the record
+opens with — seven observability images pinned to `:latest`, where what ran
+yesterday and what runs after the next restart are two deployments with one
+description. It is a real finding about how this Workspace deploys, not a
+labelling problem, and correcting it changes the deploy model.
+
+**2. There is no byte-comparison render check.** `make nginx-diff` compares the
+tracked template against the file on the host over SSH; it cannot run in CI, and
+a check that reads the target host is the thing ADR 0014 replaces. The obvious
+repair — commit a rendered vhost and diff it in CI — collides with § 4, which
+forbids the artefact to carry a production endpoint or host identity, and the
+rendered vhost carries `workspace.dotmac.io`. The two halves have to be settled
+together.
+
+**Two workarounds exist and both are refused.** `acknowledged_non_deployments`
+would let the deployment go unmentioned, which is the vacuous pass the detector
+was written against. `enforcement_mode: candidate` would keep the pin current by
+switching the gate off, which is worse than the stale pin — a governance model in
+name only, the same defect § 9 of `AGENTS.md` names.
+
+The real shape of this work is adopting ADR 0014's artefact model, which for a
+compose-on-a-host deployment means `dotmac-deployment-foundation`. That is a
+deliberate programme, and it is Michael's decision, not a side effect of
+refreshing a revision string.
+
+**What was verified while raising this**, so the next attempt does not re-derive
+it: the pinned action runs `tools/dotmac-standards` → `standards_control` and
+nothing else. `standards_control` imports only its own modules and the standard
+library — never `gate_control`, `programme_control`, `tools/check_receipts.py`
+or `tools/check_commit_identity.py`. Every one of the 23 diagnostic codes the
+bump adds belongs to the `connector.*` (ADR 0011) or `deployment.*` (ADR 0014)
+family, both **Accepted**. **No Proposed record is enforced against this
+repository**, so there is no Governance defect here to repair — the blocker is
+Workspace's, and it is an honest one.
+
+### The precedent, and why it does not rescue this repository yet
+
+`dotmac_starter_mt` is already on schema 10 (pin `4f80bd16`) and is the only
+repository in the fleet that is. Its `docker-compose.yml` has the identical
+defect — `image: ${APP_IMAGE:?…}`, resolved at deploy time — and it stays green
+by listing that file under `acknowledged_non_deployments` with the
+non-conformance written into the reason:
+
+> acknowledged rather than declared because declaring it would assert it
+> conforms, and it does not: it resolves images through `${...}` substitution,
+> which ADR 0014 counts as unpinned.
+
+So the acknowledgement list is not only for files that merely resemble a
+deployment. It legitimately carries a LEGACY deployment that a conforming one is
+replacing, provided the reason states the non-conformance and names the gate
+that removes the row.
+
+**Starter can do that because it has somewhere to point.** Its declared surface
+is `deploy/product.toml` with three rendered assets and a real
+`render --check` workflow — `dotmac-deployment-foundation`. The acknowledgement
+covers the old path while the new one carries the property.
+
+This repository has no conforming surface at all. Acknowledging
+`docker-compose.yml` here would not be deferring a retirement; it would leave
+`deployment_artefact_surfaces` describing nothing this repository deploys, which
+is the vacuous pass in its purest form — and `declaration_paths` requires at
+least one entry, so the surface would have to name something that is not the
+deployment in order to exist.
+
+**The unblock is therefore concrete rather than a judgement call:** adopt
+`dotmac-deployment-foundation` here — `deploy/product.toml`, rendered assets
+under version control, and a `render --check` job — and then acknowledge
+`docker-compose.yml` as the legacy path being retired, in the same shape Starter
+uses. That also disposes of `deployment.render-check.absent`, because
+`render --check` is a byte comparison that runs in CI and never reads the target
+host, which the SSH-based `make nginx-diff` cannot be.
+
+**This is not a Workspace-shaped problem.** Measured 2026-08-31, no other
+enrolled repository digest-pins its compose images either — Sub 22 image lines,
+ERP 6, Integrator 2, Starter 1, all zero pinned — and all four are still on
+schema 9. Each will meet this same wall on its own move to schema 10. Workspace
+is simply the first to look.
+
+### Adoption attempted 2026-08-31, and stopped on two prerequisites
+
+The decision was taken to adopt the artefact model rather than take an
+exception. Attempting it surfaced two prerequisites that no amount of care in
+this repository can satisfy, so the work stopped here rather than producing a
+descriptor that would be green and untrue.
+
+**1. The exposure contract this repository needs is published nowhere yet, and
+the hold is deliberate.**
+
+The rule the adoption has to satisfy is that the descriptor states exposure
+INTENT while private inventory supplies the resolved host — no literal address
+or hostname in the canonical bytes, and two inventories able to bind different
+hosts without rebuilding the artifact. That is exactly `IngressPolicy.v1`, and
+`IngressPolicy.v1` is `dotmac-deployment-foundation` **0.3.0a1**.
+
+The highest PUBLISHED version is **0.2.0a2** (`0.2.0a1` and `0.2.0a2`, peeled
+tags `ac21c9ae` and `55750e10`; ERP consumes a2). At 0.2.0a2 the shapes are:
+
+- `Ingress.host` is MANDATORY and matches a hostname pattern, so declaring
+  ingress writes `workspace.dotmac.io` into `deploy/product.toml`;
+- `Ingress.trusted_proxies` takes literal CIDRs — the precise defect ADR 0014's
+  own Context cites as measured, a descriptor carrying `trusted_proxies` CIDRs
+  that decide whose `X-Forwarded-For` is believed and go stale without failing;
+- `PortPublication.bind` is a free-form address string.
+
+0.3.0a1 removes all three: `bind` is fatal, `exposure` and `address_family` are
+mandatory and the bind address is DERIVED, and source policy becomes named sets
+the deployment-control plane resolves, with no product IP literal accepted
+anywhere. Adopting on 0.2.0a2 would therefore mean writing into this descriptor
+the exact literals the standard exists to remove, and doing it in the same
+change that claims ADR 0014 conformance.
+
+Publication of 0.3.0a1 is held **on purpose**, and not on anything this
+repository can influence: OpenBao containment and credential rotation are
+unsettled, the facility is what will render OpenBao's own private publication,
+and the release breaks its one recorded consumer by design so ERP's descriptor
+migration must be open first.
+
+Pinning it anyway is refused by § 6 of `AGENTS.md` — an unpublished pin is a
+finding to report, never a reason to relax the pin — and the `from-wheel` job
+exists to make that failure loud rather than survivable.
+
+**2. Nothing in this repository produces a digest-addressable image.**
+
+`[image] reference` must match `…@sha256:<64 hex>`; a tag is refused, which is
+the whole point of the record. This repository has two workflows, `ci.yml` and
+`engineering-standards.yml`, and neither builds or publishes an image.
+`docs/PILOT-RUNBOOK.md` step 4 builds it by hand on a workstation as
+`registry.dotmac.io/dotmac/workspace:${TAG}` and the host deploys that tag.
+
+So "build once, deploy by exact digest" has no producer here. The running
+digest could only be read off the production host, which is not a thing to do
+in order to satisfy a checker.
+
+**Why the available escape was refused.** `[ingress]` IS optional, so a
+descriptor covering only the container service would dodge prerequisite 1
+entirely. It does not dodge prerequisite 2, and the way past that is Starter's
+all-zeros placeholder with the real-digest check switched off. Starter can do
+that honestly because its descriptor is a deliberately-not-yet-real reference.
+This repository is in production. A placeholder digest here would put a
+descriptor into a live product describing a deployment nobody performs, and
+`deployment_artefact_surfaces` would once again name something other than what
+is deployed — the same vacuity that was refused two sections above, arrived at
+from the other direction.
+
+**What this is and is not.** The artefact model is not wrong for this
+repository. It is right, and this repository is two prerequisites short of
+being able to hold it truthfully: an image release lane that emits a digest, and
+foundation 0.3.0a1. Neither is a Workspace decision.
+
+**One correction to the fleet sequence.** ERP is already a foundation consumer
+on 0.2.0a2, and 0.3.0a1 breaks it by design, so ERP's descriptor migration is
+ordered BEFORE that release rather than after this repository. And prerequisite
+2 is not local colour: any product that builds its image by hand and deploys a
+tag meets it too, so it is worth checking for Sub, ERP and Integrator before
+they are queued behind this.
