@@ -13,6 +13,16 @@ isolating.
 `set_config('app.current_tenant', …, true)` is TRANSACTION-local, so it is set
 inside each transaction under test, and the fixture seeds in its own
 short-lived superuser sessions.
+
+RLS is only half of this table's isolation; the GRANTs are the other half, and
+the two privilege assertions at the end ask about them on EFFECTIVE privileges
+(Governance ADR 0022 § 3 property 9, AGENTS.md § 2a). They used to read
+`information_schema.table_privileges`, which lists DIRECT grants only — a role
+reaching this table through a role membership showed up there as holding
+nothing, so both assertions could pass over a table that was genuinely
+reachable. `tests/db/effective_privileges.py` carries the corrected method and
+`tests/db/test_effective_privilege_method.py` plants the case that separates the
+two.
 """
 
 from __future__ import annotations
@@ -25,7 +35,15 @@ import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import DBAPIError
 
-TABLE = "public.workspace_login_states"
+from effective_privileges import effective_privileges
+
+SCHEMA = "public"
+TABLE_NAME = "workspace_login_states"
+TABLE = f"{SCHEMA}.{TABLE_NAME}"
+#: The ONLINE tenant role — the one the application actually connects as.
+ONLINE_ROLE = "app_user"
+#: The online CONTROL-PLANE role. It has no business in a tenant ceremony.
+PLATFORM_ROLE = "platform_api"
 
 
 def _state_hash(state: str) -> str:
@@ -226,7 +244,7 @@ def test_row_level_security_is_enabled_and_forced(admin_engine: Engine) -> None:
     assert forced, "RLS is not FORCEd on the ceremony table"
 
 
-def test_the_online_role_can_read_write_and_delete_but_never_update(
+def test_the_online_role_effectively_holds_read_insert_delete_and_no_more(
     admin_engine: Engine,
 ) -> None:
     """Consuming a ceremony is a DELETE; nothing amends one.
@@ -234,42 +252,53 @@ def test_the_online_role_can_read_write_and_delete_but_never_update(
     A store whose rows can be edited is one where a verifier can be swapped for
     one the attacker already knows, so the privilege is withheld rather than
     merely unused.
+
+    BOTH directions, and that is not symmetry for its own sake. Asserting only
+    the denials passes a table the online role cannot reach at all — perfectly
+    isolated, perfectly useless, broken at the first login. Asserting only the
+    grants passes a table it can also UPDATE.
+
+    EFFECTIVE privileges (ADR 0022 § 3 property 9), never a direct-grant
+    listing: `app_user` could acquire UPDATE here through a role membership or
+    a column grant, and a catalogue listing would report neither. See
+    `tests/db/effective_privileges.py`, and the planted proof beside it.
     """
     with admin_engine.connect() as conn:
-        granted = {
-            row[0]
-            for row in conn.execute(
-                text(
-                    "SELECT privilege_type FROM information_schema.table_privileges "
-                    "WHERE table_schema = 'public' "
-                    "  AND table_name = 'workspace_login_states' "
-                    "  AND grantee = 'app_user'"
-                )
-            )
-        }
-    assert {"SELECT", "INSERT", "DELETE"} <= granted
-    assert "UPDATE" not in granted, (
-        "app_user can UPDATE a login ceremony. Consuming is a DELETE and "
-        "nothing amends one; an updatable ceremony is a verifier that can be "
-        "swapped."
+        held = effective_privileges(
+            conn, role=ONLINE_ROLE, schema=SCHEMA, table=TABLE_NAME
+        )
+    required = {"SELECT", "INSERT", "DELETE"}
+    missing = sorted(required - held)
+    assert not missing, (
+        f"{ONLINE_ROLE} cannot {', '.join(missing)} a login ceremony. The login "
+        "path is broken, not isolated."
+    )
+    excess = sorted(held - required)
+    assert not excess, (
+        f"{ONLINE_ROLE} effectively holds {', '.join(excess)} on login "
+        "ceremonies. Consuming is a DELETE and nothing amends one; an "
+        "updatable ceremony is a verifier that can be swapped, and TRUNCATE, "
+        "REFERENCES or TRIGGER on this table is reach nobody asked for."
     )
 
 
-def test_the_platform_role_has_no_access_to_login_ceremonies(
+def test_the_platform_role_effectively_reaches_login_ceremonies_not_at_all(
     admin_engine: Engine,
 ) -> None:
     """A ceremony is a tenant's, mid-flight. The vendor control plane has no
-    business in one, so the grant is absent rather than unused."""
+    business in one, so the grant is absent rather than unused.
+
+    All seven privileges, table AND column. `SELECT` alone is not the property:
+    `platform_api` holding INSERT or TRUNCATE here has crossed the plane
+    without ever reading a row — it could plant a ceremony whose PKCE verifier
+    it chose, or empty the table under every login in flight.
+    """
     with admin_engine.connect() as conn:
-        granted = {
-            row[0]
-            for row in conn.execute(
-                text(
-                    "SELECT privilege_type FROM information_schema.table_privileges "
-                    "WHERE table_schema = 'public' "
-                    "  AND table_name = 'workspace_login_states' "
-                    "  AND grantee = 'platform_api'"
-                )
-            )
-        }
-    assert not granted, f"platform_api holds {sorted(granted)} on login ceremonies"
+        held = effective_privileges(
+            conn, role=PLATFORM_ROLE, schema=SCHEMA, table=TABLE_NAME
+        )
+    assert not held, (
+        f"{PLATFORM_ROLE} effectively holds {sorted(held)} on login ceremonies. "
+        "Effective means table or column, direct or through a membership — so "
+        "this is reach, whatever the grant listing says."
+    )

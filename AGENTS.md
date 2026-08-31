@@ -40,6 +40,45 @@ Enforced by `tests/test_launcher_is_not_authorization.py`.
   data plane (`app`, `vendor_cp`, `dotmac_sub`, `dotmac_erp`) is forbidden and
   tested.
 
+## 2a. A privilege boundary is proven on EFFECTIVE privileges
+
+Governance **ADR 0022 § 3 property 9** (Accepted 2026-08-30). Where isolation is
+expressed as a GRANT boundary rather than as a policy, the grant *is* the
+control — so the way it is checked is part of the property, not an
+implementation detail.
+
+- **Never `information_schema.table_privileges`**, or any other direct-grant
+  listing, to answer *can this role reach that object?* It enumerates grants
+  made DIRECTLY to the named grantee. A role reaching the object through a role
+  MEMBERSHIP, through `PUBLIC`, or through a COLUMN grant appears in it as
+  holding nothing — so the assertion returns "no privilege found" and goes green
+  over exactly the leak it exists to detect. This repository shipped that bug;
+  it is the reason the rule is written down here.
+- **Ask `has_table_privilege` / `has_any_column_privilege`**, which resolve
+  membership, inheritance and `PUBLIC` the way the executor will at runtime.
+  `tests/db/effective_privileges.py` is the only implementation; compose it.
+- **All seven table privileges** (`SELECT`, `INSERT`, `UPDATE`, `DELETE`,
+  `TRUNCATE`, `REFERENCES`, `TRIGGER`), and the failing one is NAMED. `SELECT`
+  alone is not the property: a role holding `INSERT` or `TRUNCATE` on a table it
+  must not reach has crossed the boundary without ever reading a row.
+- **Table AND column.** A column grant leaves `has_table_privilege` false while
+  the column is readable.
+- **Both directions.** Assert the required access as well as the forbidden
+  access. A plane revoked from ITSELF passes every "cannot reach" assertion and
+  cannot serve a request.
+
+`tests/test_isolation_proof_method.py` fails the build if a direct-grant listing
+returns, and `tests/db/test_effective_privilege_method.py` is the sensitivity
+proof that keeps the replacement honest: it plants a reach that exists ONLY
+through a role membership and observes BOTH halves — the listing missing it, and
+the effective check refusing it. Either half alone is an assertion about itself.
+
+**This repository claims no ADR 0022 recovery conformance.** Property 9's method
+is now correct here; the rehearsed-restore programme the record is mostly about
+— the thirteen-part bundle, the fresh-instance rehearsal, the enumerated
+verdict — is not implemented in this repository and must not be described as if
+it were.
+
 ## 3. Compose `create_app`; never hand-build the application
 
 ADR-0015, fleet-wide. An assembly that builds its own FastAPI app silently
