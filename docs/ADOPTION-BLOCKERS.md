@@ -428,3 +428,81 @@ enrolled repository digest-pins its compose images either — Sub 22 image lines
 ERP 6, Integrator 2, Starter 1, all zero pinned — and all four are still on
 schema 9. Each will meet this same wall on its own move to schema 10. Workspace
 is simply the first to look.
+
+### Adoption attempted 2026-08-31, and stopped on two prerequisites
+
+The decision was taken to adopt the artefact model rather than take an
+exception. Attempting it surfaced two prerequisites that no amount of care in
+this repository can satisfy, so the work stopped here rather than producing a
+descriptor that would be green and untrue.
+
+**1. The exposure contract this repository needs is published nowhere yet, and
+the hold is deliberate.**
+
+The rule the adoption has to satisfy is that the descriptor states exposure
+INTENT while private inventory supplies the resolved host — no literal address
+or hostname in the canonical bytes, and two inventories able to bind different
+hosts without rebuilding the artifact. That is exactly `IngressPolicy.v1`, and
+`IngressPolicy.v1` is `dotmac-deployment-foundation` **0.3.0a1**.
+
+The highest PUBLISHED version is **0.2.0a2** (`0.2.0a1` and `0.2.0a2`, peeled
+tags `ac21c9ae` and `55750e10`; ERP consumes a2). At 0.2.0a2 the shapes are:
+
+- `Ingress.host` is MANDATORY and matches a hostname pattern, so declaring
+  ingress writes `workspace.dotmac.io` into `deploy/product.toml`;
+- `Ingress.trusted_proxies` takes literal CIDRs — the precise defect ADR 0014's
+  own Context cites as measured, a descriptor carrying `trusted_proxies` CIDRs
+  that decide whose `X-Forwarded-For` is believed and go stale without failing;
+- `PortPublication.bind` is a free-form address string.
+
+0.3.0a1 removes all three: `bind` is fatal, `exposure` and `address_family` are
+mandatory and the bind address is DERIVED, and source policy becomes named sets
+the deployment-control plane resolves, with no product IP literal accepted
+anywhere. Adopting on 0.2.0a2 would therefore mean writing into this descriptor
+the exact literals the standard exists to remove, and doing it in the same
+change that claims ADR 0014 conformance.
+
+Publication of 0.3.0a1 is held **on purpose**, and not on anything this
+repository can influence: OpenBao containment and credential rotation are
+unsettled, the facility is what will render OpenBao's own private publication,
+and the release breaks its one recorded consumer by design so ERP's descriptor
+migration must be open first.
+
+Pinning it anyway is refused by § 6 of `AGENTS.md` — an unpublished pin is a
+finding to report, never a reason to relax the pin — and the `from-wheel` job
+exists to make that failure loud rather than survivable.
+
+**2. Nothing in this repository produces a digest-addressable image.**
+
+`[image] reference` must match `…@sha256:<64 hex>`; a tag is refused, which is
+the whole point of the record. This repository has two workflows, `ci.yml` and
+`engineering-standards.yml`, and neither builds or publishes an image.
+`docs/PILOT-RUNBOOK.md` step 4 builds it by hand on a workstation as
+`registry.dotmac.io/dotmac/workspace:${TAG}` and the host deploys that tag.
+
+So "build once, deploy by exact digest" has no producer here. The running
+digest could only be read off the production host, which is not a thing to do
+in order to satisfy a checker.
+
+**Why the available escape was refused.** `[ingress]` IS optional, so a
+descriptor covering only the container service would dodge prerequisite 1
+entirely. It does not dodge prerequisite 2, and the way past that is Starter's
+all-zeros placeholder with the real-digest check switched off. Starter can do
+that honestly because its descriptor is a deliberately-not-yet-real reference.
+This repository is in production. A placeholder digest here would put a
+descriptor into a live product describing a deployment nobody performs, and
+`deployment_artefact_surfaces` would once again name something other than what
+is deployed — the same vacuity that was refused two sections above, arrived at
+from the other direction.
+
+**What this is and is not.** The artefact model is not wrong for this
+repository. It is right, and this repository is two prerequisites short of
+being able to hold it truthfully: an image release lane that emits a digest, and
+foundation 0.3.0a1. Neither is a Workspace decision.
+
+**One correction to the fleet sequence.** ERP is already a foundation consumer
+on 0.2.0a2, and 0.3.0a1 breaks it by design, so ERP's descriptor migration is
+ordered BEFORE that release rather than after this repository. And prerequisite
+2 is not local colour: any product that builds its image by hand and deploys a
+tag meets it too, so it is worth checking for Sub, ERP and Integrator before
+they are queued behind this.
