@@ -1,0 +1,475 @@
+# The Tenant Workspace — ProductDeploymentSpec.v1
+#
+# Implemented by the published `dotmac-deployment-foundation==0.2.0a2` facility
+# (Starter ADR-0070). This file is the ONE deployment artifact this repository
+# declares; the Compose project, the nginx site, the collector configuration and
+# the alert rules under `deploy/rendered/` are all RENDERED from it and checked
+# byte-for-byte in CI.
+#
+# ## What this descriptor claims, and what it does not
+#
+# It is DECLARATIVE INPUT plus a CI gate. It is NOT the deployment engine, and
+# `deploy/rendered/docker-compose.yml` is NOT the production runtime topology.
+# The live path is still the root `docker-compose.yml` driven by hand from
+# `docs/PILOT-RUNBOOK.md`. Exactly one thing has moved: the IMAGE IDENTITY.
+# `deploy/README.md` § "Current boundary" lists what remains outside, and why —
+# read it before assuming the rendered project is what runs.
+#
+# ## It is HOST-NEUTRAL, on purpose
+#
+# `[ingress].host` below is `workspace.fixture.invalid` — a reserved,
+# permanently non-resolvable name (RFC 2606). The production hostname is NOT in
+# this file and must never be committed to it: this artifact is reusable across
+# deployments, and the real host arrives at AUTHORIZATION time from the
+# environment inventory, which then renders the production vhost and binds that
+# render's digest into the execution plan and receipt.
+#
+# That is also what makes CI's `render --check` meaningful. It renders against
+# this non-production fixture and byte-compares the result, so a reviewer reads
+# any deployment change as a diff — without the repository ever having to hold
+# the name of a live host.
+#
+# `tests/test_deployment_descriptor.py` enforces both halves: the ingress host
+# must sit under a reserved TLD, and no deployment artefact may carry a real
+# host name. Both guards carry a sensitivity proof — the production host is
+# PLANTED into a throwaway copy and each guard is required to report it —
+# because a guard that has never been seen to bite is not a guard. (That is
+# also why this comment does not spell the host out: the guard reads this file.)
+
+schema = "ProductDeploymentSpec.v1"
+product = "dotmac-workspace"
+
+# What the Workspace IS. Projected into the collector's `deployment.environment`
+# resource attribute, so a descriptor that said `reference` while serving live
+# members would mislabel every signal it governs. Only the HOSTNAME is a
+# fixture here; the deployment this file describes is the production one.
+environment = "production"
+
+[assembly]
+# The composed module set, as canonical JSON. `tests/test_deployment_descriptor.py`
+# recomputes this digest from the committed bytes and cross-checks each version
+# against `pyproject.toml`, so a pin that moves without the manifest moving
+# fails the build rather than leaving the deployment's approved module set
+# describing something that is no longer installed.
+manifest_path = "deploy/product-manifest.json"
+manifest_digest = "sha256:a668c6cc64cc6f8302d1db61a51f0e18f6f7b650bdba3a06ddd7928ec19fb59d"
+
+[image]
+# THE PLACEHOLDER IS DELIBERATE, AND IT IS FAIL-CLOSED.
+#
+# `registry.dotmac.io/dotmac/workspace` has no candidate whose digest this
+# repository can name: the Workspace has no image publication lane, so no CI run
+# has ever built, pushed and resolved a registry digest here. Writing a digest
+# this repository cannot derive would be worse than the placeholder — it would
+# READ as a pin while naming an artifact nobody verified.
+#
+# So the value below is the all-zero placeholder the foundation's
+# `check_no_placeholder_digests` recognises, and nothing accepts it:
+#
+#   - `scripts/resolve_deploy_image.sh` — the ONLY supported way to give the
+#     deploy path an image — refuses it by name, so a deployment cannot be
+#     started from this descriptor as it stands;
+#   - the conformance workflow sets `require-real-digests: false` ONLY while
+#     this is a placeholder, and `test_the_placeholder_exemption_states_an_
+#     enforceable_premise` fails the moment a real digest lands without the gate
+#     being armed — and fails the other way too, if the flag is turned off while
+#     the digest is real.
+#
+# What it replaces matters more than what it is: the deploy path used to run
+# `registry.dotmac.io/dotmac/workspace:${WORKSPACE_TAG:-latest}`. A bare
+# `docker compose up -d` on a host with no `.env` therefore pulled whatever
+# `:latest` pointed at that morning. That is now unreachable — the root compose
+# names no tag and has no default, and the resolver refuses anything that is not
+# `name@sha256:<64 hex>`. The deployment is an immutable digest, or it is
+# nothing.
+reference = "registry.dotmac.io/dotmac/workspace@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+# The revision this descriptor describes. It moves with the image digest, in one
+# commit, because a digest without the source it was built from is an artifact
+# nobody can rebuild or audit.
+source_revision = "71003a87d76c63c3199476eeecc44459e3988646"
+
+# ── the one role ─────────────────────────────────────────────────────────────
+#
+# One service, because that is all the Workspace is. No worker, no scheduler, no
+# broker: nothing here runs a background job, and declaring a role for one would
+# render a container with nothing to do.
+
+[[roles]]
+code = "workspace"
+
+# uvicorn directly, with no shell. The image's own CMD wraps this in
+# `sh -c` in order to apply a `${FORWARDED_ALLOW_IPS:-127.0.0.1}` default, and
+# that default is the nine-day production defect the root compose file documents
+# at length: this service is reached through a PUBLISHED port, so the peer
+# uvicorn sees is the Docker bridge gateway and a bare `127.0.0.1` matches
+# nothing — the forwarded scheme is discarded, `is_secure_request` concludes
+# plain HTTP, and every cookie ships without `Secure`, silently, while the site
+# works perfectly.
+#
+# uvicorn reads `FORWARDED_ALLOW_IPS` from the environment when the flag is
+# absent, so declaring it as a MATERIAL (below) renders `${FORWARDED_ALLOW_IPS:?…}`
+# and an unset value refuses to start instead of quietly trusting nobody.
+command = [
+  "uvicorn",
+  "dotmac_workspace.main:app",
+  "--host",
+  "0.0.0.0",
+  "--port",
+  "8000",
+  "--proxy-headers",
+]
+
+replicas = 1
+
+# The pilot ran two application workers behind one container. `stop_grace` is
+# the budget for the in-flight OIDC callback: a ceremony consumed by
+# `DELETE … RETURNING` that loses its response leaves the member with a failed
+# login and a state that can never be replayed.
+stop_grace_seconds = 30
+
+# Material NAMES the host resolves. Every one of these is either a secret or an
+# environment-specific address, and neither belongs in a repository (ADR-0009).
+# `TRUSTED_HOSTS`, `PLATFORM_ROOT_DOMAIN` and `WORKSPACE_OIDC_REDIRECT_URL`
+# carry the deployment's public identity — which is the second reason they are
+# materials rather than literals: a literal would commit the production hostname
+# into the rendered Compose file.
+materials = [
+  "DATABASE_URL",
+  "PLATFORM_DATABASE_URL",
+  "TRUSTED_HOSTS",
+  "PLATFORM_ROOT_DOMAIN",
+  "JWT_SECRET",
+  "SESSION_HASH_SECRET",
+  "CSRF_SECRET",
+  "WORKSPACE_OIDC_ISSUER",
+  "WORKSPACE_OIDC_CLIENT_ID",
+  "WORKSPACE_OIDC_REDIRECT_URL",
+  "WORKSPACE_OIDC_CLIENT_SECRET_FILE",
+  "FORWARDED_ALLOW_IPS",
+]
+
+# NO MEASURED ENVELOPE EXISTS IN THIS REPOSITORY. Nothing here profiles the
+# Workspace, and the running deployment declares no limits at all — which is the
+# reason limits are required rather than defaulted: an unbounded container on a
+# shared app host is how one service's leak takes down its neighbour. These are
+# declared BOUNDS chosen to be comfortably above a single-service ASGI app, not
+# measurements, and this comment says so rather than presenting a guess as a
+# fact.
+[roles.resources]
+cpus = "2.0"
+memory = "1G"
+pids = 512
+
+[roles.security]
+# The image's own non-root user (Dockerfile: uid/gid 10001). Stated here so the
+# rendered project cannot silently run as somebody else.
+user = "10001:10001"
+read_only_root = true
+no_new_privileges = true
+cap_drop = ["ALL"]
+tmpfs = ["/tmp"]
+
+# Liveness: the kernel's `/health`, whose handler is documented as "does not
+# touch DB" and returns a constant. That is the correct shape for liveness and
+# exactly the wrong shape for a readiness gate.
+[roles.health.live]
+path = "/health"
+port = 8000
+interval_seconds = 30
+timeout_seconds = 5
+retries = 3
+start_period_seconds = 20
+# The probe MUST carry a Host header the deployment trusts. It reaches the app
+# over loopback, so the default header is `127.0.0.1:8000`, which `TRUSTED_HOSTS`
+# rejects with 400 BEFORE routing — and the check then fails forever while the
+# service is perfectly healthy, which is worse than no check at all. The host is
+# read from `TRUSTED_HOSTS` rather than written twice, so it stays correct in
+# every deployment and no hostname enters this file.
+probe = [
+  "python",
+  "-c",
+  "import os,sys,urllib.request; h=os.environ['TRUSTED_HOSTS'].split(',')[0].strip(); r=urllib.request.Request('http://127.0.0.1:8000/health', headers={'Host': h}); sys.exit(0 if urllib.request.urlopen(r, timeout=5).status == 200 else 1)",
+]
+
+# Readiness: `GET /login`, and it is a real gate rather than a second liveness
+# probe. It depends on `require_tenant`, which resolves the request Host to a
+# tenant row IN THE DATABASE, so it fails when the database is unreachable, when
+# `TRUSTED_HOSTS` does not cover the deployment, and when no tenant matches. It
+# also renders, so it proves the template and design-system surface loaded.
+#
+# It is the one route that must work for the Workspace to be useful. A `/` that
+# redirected would report healthy while login was broken.
+[roles.health.ready]
+path = "/login"
+port = 8000
+interval_seconds = 30
+timeout_seconds = 10
+retries = 3
+start_period_seconds = 20
+probe = [
+  "python",
+  "-c",
+  "import os,sys,urllib.request; h=os.environ['TRUSTED_HOSTS'].split(',')[0].strip(); r=urllib.request.Request('http://127.0.0.1:8000/login', headers={'Host': h}); sys.exit(0 if urllib.request.urlopen(r, timeout=10).status == 200 else 1)",
+]
+
+# Ordinary, non-secret configuration. Literal because it is the same in every
+# deployment and a reviewer should be able to read it in a diff.
+[roles.environment]
+ENVIRONMENT = "production"
+LOG_LEVEL = "INFO"
+WORKSPACE_OIDC_PROVIDER_BINDING = "primary"
+WORKSPACE_OIDC_SCOPES = "openid"
+
+# ── migrations ───────────────────────────────────────────────────────────────
+
+[migration]
+# The same entry point `make migrate` uses, so the deploy path and a laptop
+# compose one graph rather than two. Three separately-owned lineages — the
+# kernel's, the application directory's, and this assembly's — are composed
+# programmatically because both dependencies are INSTALLED packages whose paths
+# are environment-specific.
+command = [
+  "python",
+  "-c",
+  "from alembic import command; from dotmac_workspace.migrations import make_alembic_config; import os; command.upgrade(make_alembic_config(os.environ['MIGRATION_DATABASE_URL']), 'heads')",
+]
+
+# `alembic current`, not a token swap on the line above. There is no way to
+# derive the read verb from an upgrade command, and a guess that is right for
+# one product is wrong for the next.
+heads_command = [
+  "python",
+  "-c",
+  "from alembic import command; from dotmac_workspace.migrations import make_alembic_config; import os; command.current(make_alembic_config(os.environ['MIGRATION_DATABASE_URL']))",
+]
+
+# The ADMIN role, which holds DDL. It appears in NO runtime role's materials —
+# the container runs as the online role, which cannot alter its own schema even
+# if a future change tried to. That split is what makes "no migrations on boot"
+# enforceable rather than conventional.
+owner_material = "MIGRATION_DATABASE_URL"
+
+# One head per composed lineage. `heads` is plural because a composition has
+# several, and a deployment that cannot say which it expects cannot detect a
+# missing one.
+expected_heads = [
+  "0028_machine_attribution",      # dotmac-kernel 0.1.0a97
+  "ad_0001_application_bindings",  # dotmac-application-directory 0.1.0a3
+  "a001_login_ceremony_state",     # this assembly
+]
+
+# Every revision in this composition adds; none rewrites or removes a column the
+# previous image reads. The previous image therefore remains a valid rollback
+# target, which is what `online` declares. Getting this wrong in the safe
+# direction costs a maintenance window; getting it wrong the other way runs an
+# old image against a schema it cannot read.
+compatibility = "online"
+lock_timeout_seconds = 300
+lock_retries = 3
+
+[runtime_materials]
+names = [
+  "DATABASE_URL",
+  "PLATFORM_DATABASE_URL",
+  "TRUSTED_HOSTS",
+  "PLATFORM_ROOT_DOMAIN",
+  "JWT_SECRET",
+  "SESSION_HASH_SECRET",
+  "CSRF_SECRET",
+  "WORKSPACE_OIDC_ISSUER",
+  "WORKSPACE_OIDC_CLIENT_ID",
+  "WORKSPACE_OIDC_REDIRECT_URL",
+  "WORKSPACE_OIDC_CLIENT_SECRET_FILE",
+  "FORWARDED_ALLOW_IPS",
+]
+
+# ── ingress ──────────────────────────────────────────────────────────────────
+
+[ingress]
+# A RESERVED, PERMANENTLY NON-RESOLVABLE NAME (RFC 2606 § 2). Not the
+# deployment's host, and not a placeholder anyone could mistake for one: nothing
+# resolves under `.invalid`, ever, so a rendered vhost carrying it cannot be
+# installed by accident.
+#
+# The real host is supplied at authorization time by the environment inventory,
+# which renders the production vhost then and binds that render's digest into
+# the execution plan and receipt. Committing it here would make one reusable
+# artifact permanently about one deployment.
+host = "workspace.fixture.invalid"
+
+redirect_http = true
+tls_policy = "modern"
+security_headers = true
+
+# Deliberately EMPTY. The proxy in front is named by address, and an address set
+# committed to Git goes stale with nothing failing. The running deployment
+# answers it through `FORWARDED_ALLOW_IPS`, which is a material.
+trusted_proxies = []
+
+[ingress.static]
+# Baked into the image digest and promoted with it. The design system's compiled
+# stylesheet is committed package data, so a checkout — and an image — works
+# air-gapped, and a rollback restores the exact assets its digest carries.
+static = "image"
+# The Workspace stores no user uploads. It shows a portfolio and completes a
+# login ceremony; nothing it owns outlives an image digest.
+uploads = "none"
+
+[[ingress.routes]]
+path = "/"
+role = "workspace"
+port = 8000
+# No websocket and no SSE anywhere in this surface: every interactive control is
+# an htmx request over ordinary HTTP.
+websocket = false
+sse = false
+read_timeout_seconds = 60
+send_timeout_seconds = 60
+
+# ── backup ───────────────────────────────────────────────────────────────────
+#
+# THE WORKSPACE OWNS AND DECLARES ITS LOGICAL POSTGRESQL DATASET. The fleet
+# recovery facility OWNS EXECUTION: it dumps, validates and rehearses; no
+# Workspace container ever runs a backup command.
+#
+# The dataset is identified LOGICALLY — the database and what it contains. The
+# shared PostgreSQL host it currently sits on is INVENTORY, not identity, and is
+# deliberately named in no field here (nor in this comment): a declaration that
+# encoded the box would break the day the database moves, which is a fact about
+# operations rather than about the dataset.
+#
+# Declaring the dataset is right even though execution is elsewhere. The
+# facility's own backup module states the split: "It runs no `pg_dump`, opens no
+# socket and reads no credential. It computes the POLICY — what to back up, how
+# to verify it, whether the last proof is too old — and the deployment host's
+# `Effects` implementation performs it." An empty `[backup]` would be the false
+# statement, and the CLI names it exactly: "a claim that nothing needs backing
+# up".
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# WHAT ProductDeploymentSpec.v1 (0.2.0a2) CANNOT BIND — the recovery contract is
+# INCOMPLETE HERE, and this is recorded rather than encoded into fields that
+# mean something else. Each line below was OBSERVED, not assumed; the refusals
+# are reproduced by `tests/test_deployment_descriptor.py`.
+#
+#  1. THE EXECUTOR. There is no owner field. `executed_by` is refused: "unknown
+#     key(s) ['executed_by'] — the schema defines no such field". `offsite` is a
+#     destination, not an operator, and writing an owner into it would satisfy a
+#     reader and misdescribe the schema. A named owner that no typed field binds
+#     is not an executor, so this contract has none.
+#
+#  2. THE RECEIPT. There is no receipt field on `[backup]` or on a dataset —
+#     both are refused as unknown keys — and no CLI input for one: `dotmac-deploy
+#     backup` takes no arguments at all, and `restore-rehearsal` takes only
+#     `--dataset`. `backup.assess()` CAN judge freshness, but only from a
+#     `Sequence[BackupRecord]` a caller supplies, and nothing in the gate path
+#     supplies one. So `restore_proof_max_age_days` below is a bound with
+#     nothing to evaluate against: acceptance cannot fail on an absent or stale
+#     receipt, because acceptance never sees a receipt.
+#
+#  3. FOUR OF THE SEVEN VERIFICATION ELEMENTS ARE REFUSED AT PARSE TIME.
+#     `BackupDataset.VERIFICATIONS` is exactly ("schema", "row_counts",
+#     "migration_heads"). Adding `roles`, `ownership`, `memberships` or
+#     `effective_privileges` raises "unknown verification(s)" and the descriptor
+#     will not load. This is not a cosmetic shortfall. This repository's own
+#     restore drill found that role MEMBERSHIPS are cluster-level and absent
+#     from a database dump, so a restored database served `permission denied for
+#     table tenants` while holding a complete copy of the data — schema present,
+#     rows present, unusable. PR #15 then established that a privilege must be
+#     proved on EFFECTIVE privileges rather than a GRANT listing, because a role
+#     reaching a table through a membership reads as having no access. The four
+#     elements a2 refuses are precisely the ones that catch that class.
+#
+#  4. THE CADENCE. There is no interval field. `assess()` takes
+#     `expected_interval_seconds` as a caller argument defaulting to one day
+#     while this dataset is dumped hourly, so the descriptor cannot carry the
+#     RPO its own staleness rule is evaluated against. The real numbers live in
+#     `deploy/alerts/thresholds.json`, where they are at least reviewable.
+#
+# `test_the_externally_executed_recovery_contract_is_fully_bound` FAILS while
+# any of these hold. That failure is the point: it keeps the gap monitored
+# rather than filed in prose, and it turns green when the published contract
+# gains the fields. Nothing here borrows the unpublished 0.3.0a1 types, and
+# nothing invents a Workspace-only encoding to make a check pass.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[backup]
+
+[[backup.datasets]]
+code = "primary"
+kind = "postgres"
+
+# The DSN whoever performs the backup resolves — deliberately NOT one of this
+# deployment's `runtime_materials`, and the absence is load-bearing: no
+# Workspace container ever holds a credential that can read every row of every
+# table. The fleet dump runs as a BYPASSRLS role, which is not optional: under
+# FORCEd RLS `pg_dump` sets `row_security = off` and PostgreSQL RAISES rather
+# than filtering, so a dump taken as the table owner exits 1 with one COPY block
+# instead of silently producing a short file.
+#
+# This is the closest a2 comes to naming the executor, and it is not close: it
+# names a CREDENTIAL, not an owner. See gap 1 above.
+material = "BACKUP_DATABASE_URL"
+
+# The bucket holds Object Lock GOVERNANCE for 30 days, with versioning, and the
+# uploading credential is PutObject-only — list, read and delete are refused, so
+# a compromised source can add an object and cannot remove one. An overwrite is
+# accepted (S3 needs no DeleteObject for that) and the prior version survives.
+retention_days = 30
+offsite = "workspace-dumps"
+
+# The dumps are age-encrypted. Worth stating with its own caveat, because it is
+# the reason freshness is defined as PROVEN RESTORABLE rather than object age:
+# the source holds the public key and could upload a perfectly fresh, perfectly
+# encrypted dump of nothing.
+encryption = "age"
+checksum = "sha256"
+
+# The restore drill runs WEEKLY. Seven days rather than the fleet's usual 30
+# because a tighter bound is the true one here, and a contract looser than the
+# practice it describes stops detecting the practice stopping.
+#
+# Read gap 2 before trusting this number: nothing in the gate path can evaluate
+# it, because no receipt reaches the gate.
+restore_proof_max_age_days = 7
+
+# THE MAXIMUM a2 PERMITS, AND THREE OF SEVEN. The recovery contract requires
+# roles, ownership, memberships, effective privileges, migration heads, schema
+# and data; the four missing ones are refused at parse time (gap 3). What is
+# declared is the contract for the three that CAN be declared, not a claim that
+# three is the contract.
+#
+# What is and is not established today: the hourly validator checks the artefact
+# semantically and specifically refuses to supply what the backup should carry
+# (its first version hand-created the roles and would have passed forever while
+# the artefact was missing them), and the weekly drill restores and reaches a
+# Workspace serving `GET /login` — which needs the schema present and the role
+# layer intact. `migration_heads` is NOT known to be checked by that drill; it
+# is declared because a restore that cannot say which revisions it is at cannot
+# be reasoned about, and naming the gap beats quietly declaring less.
+verify = ["schema", "row_counts", "migration_heads"]
+
+# ── telemetry ────────────────────────────────────────────────────────────────
+
+[telemetry]
+# THE WORKSPACE SHIPS NOTHING TODAY, and this section says so rather than
+# rendering a collector configuration that describes signals nobody collects.
+# There is no promtail, no vmagent and no OTLP exporter in its deployment; the
+# root compose file has exactly one service. A rendered `otel-collector.yaml`
+# sitting beside a deployment that runs no collector reads, to anyone who does
+# not check, as telemetry — which is the same shape of defect as an alert rule
+# no producer can satisfy.
+logs = false
+metrics = false
+traces = false
+deployment_annotations = false
+
+# ── rollout ──────────────────────────────────────────────────────────────────
+
+[rollout]
+# How long a candidate must stay healthy before the deployment is called done.
+stability_window_seconds = 120
+# Two digests kept, so a rollback has somewhere to go and the host does not
+# accumulate images nobody can name.
+rollback_images_retained = 2

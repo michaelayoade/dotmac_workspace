@@ -397,6 +397,23 @@ url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
 reference = "forgejo"
 
 [[package]]
+name = "dotmac-deployment-foundation"
+version = "0.2.0a2"
+description = "Stateless build- and deploy-time facility for Dotmac product assemblies"
+optional = false
+python-versions = ">=3.11,<3.14"
+groups = ["dev"]
+files = [
+    {file = "dotmac_deployment_foundation-0.2.0a2-py3-none-any.whl", hash = "sha256:ff41ca5816a40c1e1c4030f2af71b8f355d12092f9af371550a214e3fd83826f"},
+    {file = "dotmac_deployment_foundation-0.2.0a2.tar.gz", hash = "sha256:e4d70f4bdd846176ca3b27d9bb6698aed2a1300a47ef6aae78b03b0f5b44f9a3"},
+]
+
+[package.source]
+type = "legacy"
+url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
+reference = "forgejo"
+
+[[package]]
 name = "dotmac-kernel"
 version = "0.1.0a97"
 description = "DotMac platform kernel — multi-tenant FastAPI foundation (config, RLS db, identity/tenancy models, security, platform auth, middleware, settings, features registry, audit)"
@@ -2108,4 +2125,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.14"
-content-hash = "8b13a4b70e5217f91d364c5889ed4637b17eb75fbd74831b9be42bba88d49f65"
+content-hash = "15be5f4816d62f784ce93e87e5ec30f117c852e4257d85af0647bed6c2ed560d"

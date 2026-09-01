@@ -1,0 +1,83 @@
+name: Deployment conformance
+
+# The Workspace's half of Starter ADR-0070. It calls the Starter-owned reusable
+# gate at an IMMUTABLE source revision and pins the facility by exact version.
+#
+# ## Why this commit
+#
+# `55750e104df3dd94b6f9f70bf8c8db53986394c7` is the peeled commit of the
+# annotated tag `dotmac-deployment-foundation-v0.2.0a2`, which is the version
+# pinned below. The two move together on purpose: a2's only code change
+# (`image/audit.py`, which evaluates `Config.User` from inspect evidence) and
+# that revision's workflow change (running the filesystem collector as an
+# inspection-only uid/gid 0 and refusing the gate on a partial walk) are two
+# halves of ONE fix. Pinning a2 against an earlier workflow revision would pair
+# a package expecting the new collector with a caller that never supplies it.
+#
+# A branch or a tag is not admissible here. A tag is mutable, so a pin to one is
+# a pin to whatever that name points at today — and the entire point of the pin
+# is that CI executes the revision that was reviewed.
+#
+# ## What this gate proves, and what it does not
+#
+# It proves the DESCRIPTOR and the RENDERED BYTES agree, that the descriptor
+# passes every conformance rule the facility ships, and that a real Docker
+# Compose engine will parse the rendered project. It renders against
+# `deploy/product.toml`'s NON-PRODUCTION fixture host and byte-compares — the
+# production hostname is never in this repository, so this gate never sees it
+# and cannot leak it.
+#
+# It does NOT deploy, names no target, and does not make the rendered project
+# the Workspace's runtime. See `deploy/README.md` § "Current boundary".
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  deployment:
+    uses: michaelayoade/dotmac_starter_mt/.github/workflows/deployment-conformance.yml@55750e104df3dd94b6f9f70bf8c8db53986394c7
+    with:
+      descriptor: deploy/product.toml
+      rendered-dir: deploy/rendered
+      thresholds: deploy/alerts/thresholds.json
+      # EXACT, and the same string `pyproject.toml` pins. A range is refused by
+      # the reusable workflow itself, and
+      # `tests/test_deployment_descriptor.py::test_the_pinned_foundation_version_
+      # is_stated_once` fails if these two ever disagree.
+      foundation-version: "0.2.0a2"
+      # OFF, and the exemption states an ENFORCEABLE premise rather than a
+      # promise (ADR-0018). `deploy/product.toml` pins the all-zero placeholder
+      # because the Workspace has no image publication lane and this repository
+      # therefore cannot name a candidate digest it derived. `require-real-digests`
+      # suppresses exactly the findings `check_no_placeholder_digests` returns
+      # and nothing else — the assembly manifest digest below is real, so it is
+      # still checked.
+      #
+      # The premise is enforced in BOTH directions by
+      # `test_the_placeholder_exemption_states_an_enforceable_premise`: the
+      # moment a real image digest lands, that test fails until this is `true`,
+      # and it fails equally if this is set to `false` while the digest is real.
+      # ERP left this flag off after its sentinel was replaced and nothing
+      # noticed; an all-zero digest PARSES, so with the gate off and no ratchet,
+      # nothing at all prevents a silent regression back to a placeholder.
+      require-real-digests: false
+    secrets:
+      # The read-only `ci-reader` Forgejo credential. The facility is published
+      # ONLY to the private index, so the gate has no other way to install it,
+      # and the reusable workflow authenticates as the literal user `ci-reader`.
+      #
+      # PREREQUISITE, and it is a repository SETTING rather than a file: this
+      # repository must carry a `FORGEJO_READ_TOKEN` actions secret holding that
+      # identity's token (canonical source `secret/dotmac/forgejo/ci-reader-token`
+      # in OpenBao). The repository's existing `FORGEJO_PYPI_*` pair is a
+      # different identity and is deliberately not substituted here: a gate that
+      # silently authenticates as somebody else is worse than one that fails
+      # with a 401 naming the credential it wanted. Until the secret exists this
+      # job fails at the install step, loudly.
+      FORGEJO_READ_TOKEN: ${{ secrets.FORGEJO_READ_TOKEN }}
