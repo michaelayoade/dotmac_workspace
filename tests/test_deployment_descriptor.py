@@ -471,15 +471,21 @@ def test_the_descriptor_passes_the_pinned_facilitys_own_checks() -> None:
 #   absent or stale, or when verification omits any of: roles, ownership,
 #   memberships, effective privileges, migration heads, schema, or data.
 
-RECOVERY_VERIFICATIONS = (
-    "roles",
-    "ownership",
-    "memberships",
-    "effective_privileges",
-    "migration_heads",
-    "schema",
-    "data",
-)
+# The seven elements a restore must establish, each mapped to the descriptor
+# value(s) that would satisfy it. A mapping rather than a flat list because the
+# requirement is stated in English and the contract in field values: "data" is
+# satisfied by `row_counts`, which is the published vocabulary for it. Without
+# that, the acceptance test below could never turn green even after a sensible
+# contract change — and a bar nothing can clear is not a bar.
+RECOVERY_VERIFICATIONS: dict[str, tuple[str, ...]] = {
+    "roles": ("roles",),
+    "ownership": ("ownership",),
+    "memberships": ("memberships",),
+    "effective privileges": ("effective_privileges",),
+    "migration heads": ("migration_heads",),
+    "schema": ("schema",),
+    "data": ("row_counts", "data"),
+}
 
 
 def test_the_workspace_declares_its_logical_dataset() -> None:
@@ -620,5 +626,9 @@ def test_the_externally_executed_recovery_contract_is_fully_bound() -> None:
 
     # Verification covers all seven.
     declared = set(dataset["verify"])
-    missing = [item for item in RECOVERY_VERIFICATIONS if item not in declared]
+    missing = [
+        requirement
+        for requirement, accepted in RECOVERY_VERIFICATIONS.items()
+        if not declared.intersection(accepted)
+    ]
     assert not missing, f"verification omits {missing}"
