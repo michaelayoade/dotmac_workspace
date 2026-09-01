@@ -327,6 +327,129 @@ sse = false
 read_timeout_seconds = 60
 send_timeout_seconds = 60
 
+# ── backup ───────────────────────────────────────────────────────────────────
+#
+# THE WORKSPACE OWNS AND DECLARES ITS LOGICAL POSTGRESQL DATASET. The fleet
+# recovery facility OWNS EXECUTION: it dumps, validates and rehearses; no
+# Workspace container ever runs a backup command.
+#
+# The dataset is identified LOGICALLY — the database and what it contains. The
+# shared PostgreSQL host it currently sits on is INVENTORY, not identity, and is
+# deliberately named in no field here (nor in this comment): a declaration that
+# encoded the box would break the day the database moves, which is a fact about
+# operations rather than about the dataset.
+#
+# Declaring the dataset is right even though execution is elsewhere. The
+# facility's own backup module states the split: "It runs no `pg_dump`, opens no
+# socket and reads no credential. It computes the POLICY — what to back up, how
+# to verify it, whether the last proof is too old — and the deployment host's
+# `Effects` implementation performs it." An empty `[backup]` would be the false
+# statement, and the CLI names it exactly: "a claim that nothing needs backing
+# up".
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# WHAT ProductDeploymentSpec.v1 (0.2.0a2) CANNOT BIND — the recovery contract is
+# INCOMPLETE HERE, and this is recorded rather than encoded into fields that
+# mean something else. Each line below was OBSERVED, not assumed; the refusals
+# are reproduced by `tests/test_deployment_descriptor.py`.
+#
+#  1. THE EXECUTOR. There is no owner field. `executed_by` is refused: "unknown
+#     key(s) ['executed_by'] — the schema defines no such field". `offsite` is a
+#     destination, not an operator, and writing an owner into it would satisfy a
+#     reader and misdescribe the schema. A named owner that no typed field binds
+#     is not an executor, so this contract has none.
+#
+#  2. THE RECEIPT. There is no receipt field on `[backup]` or on a dataset —
+#     both are refused as unknown keys — and no CLI input for one: `dotmac-deploy
+#     backup` takes no arguments at all, and `restore-rehearsal` takes only
+#     `--dataset`. `backup.assess()` CAN judge freshness, but only from a
+#     `Sequence[BackupRecord]` a caller supplies, and nothing in the gate path
+#     supplies one. So `restore_proof_max_age_days` below is a bound with
+#     nothing to evaluate against: acceptance cannot fail on an absent or stale
+#     receipt, because acceptance never sees a receipt.
+#
+#  3. FOUR OF THE SEVEN VERIFICATION ELEMENTS ARE REFUSED AT PARSE TIME.
+#     `BackupDataset.VERIFICATIONS` is exactly ("schema", "row_counts",
+#     "migration_heads"). Adding `roles`, `ownership`, `memberships` or
+#     `effective_privileges` raises "unknown verification(s)" and the descriptor
+#     will not load. This is not a cosmetic shortfall. This repository's own
+#     restore drill found that role MEMBERSHIPS are cluster-level and absent
+#     from a database dump, so a restored database served `permission denied for
+#     table tenants` while holding a complete copy of the data — schema present,
+#     rows present, unusable. PR #15 then established that a privilege must be
+#     proved on EFFECTIVE privileges rather than a GRANT listing, because a role
+#     reaching a table through a membership reads as having no access. The four
+#     elements a2 refuses are precisely the ones that catch that class.
+#
+#  4. THE CADENCE. There is no interval field. `assess()` takes
+#     `expected_interval_seconds` as a caller argument defaulting to one day
+#     while this dataset is dumped hourly, so the descriptor cannot carry the
+#     RPO its own staleness rule is evaluated against. The real numbers live in
+#     `deploy/alerts/thresholds.json`, where they are at least reviewable.
+#
+# `test_the_externally_executed_recovery_contract_is_fully_bound` FAILS while
+# any of these hold. That failure is the point: it keeps the gap monitored
+# rather than filed in prose, and it turns green when the published contract
+# gains the fields. Nothing here borrows the unpublished 0.3.0a1 types, and
+# nothing invents a Workspace-only encoding to make a check pass.
+# ─────────────────────────────────────────────────────────────────────────────
+
+[backup]
+
+[[backup.datasets]]
+code = "primary"
+kind = "postgres"
+
+# The DSN whoever performs the backup resolves — deliberately NOT one of this
+# deployment's `runtime_materials`, and the absence is load-bearing: no
+# Workspace container ever holds a credential that can read every row of every
+# table. The fleet dump runs as a BYPASSRLS role, which is not optional: under
+# FORCEd RLS `pg_dump` sets `row_security = off` and PostgreSQL RAISES rather
+# than filtering, so a dump taken as the table owner exits 1 with one COPY block
+# instead of silently producing a short file.
+#
+# This is the closest a2 comes to naming the executor, and it is not close: it
+# names a CREDENTIAL, not an owner. See gap 1 above.
+material = "BACKUP_DATABASE_URL"
+
+# The bucket holds Object Lock GOVERNANCE for 30 days, with versioning, and the
+# uploading credential is PutObject-only — list, read and delete are refused, so
+# a compromised source can add an object and cannot remove one. An overwrite is
+# accepted (S3 needs no DeleteObject for that) and the prior version survives.
+retention_days = 30
+offsite = "workspace-dumps"
+
+# The dumps are age-encrypted. Worth stating with its own caveat, because it is
+# the reason freshness is defined as PROVEN RESTORABLE rather than object age:
+# the source holds the public key and could upload a perfectly fresh, perfectly
+# encrypted dump of nothing.
+encryption = "age"
+checksum = "sha256"
+
+# The restore drill runs WEEKLY. Seven days rather than the fleet's usual 30
+# because a tighter bound is the true one here, and a contract looser than the
+# practice it describes stops detecting the practice stopping.
+#
+# Read gap 2 before trusting this number: nothing in the gate path can evaluate
+# it, because no receipt reaches the gate.
+restore_proof_max_age_days = 7
+
+# THE MAXIMUM a2 PERMITS, AND THREE OF SEVEN. The recovery contract requires
+# roles, ownership, memberships, effective privileges, migration heads, schema
+# and data; the four missing ones are refused at parse time (gap 3). What is
+# declared is the contract for the three that CAN be declared, not a claim that
+# three is the contract.
+#
+# What is and is not established today: the hourly validator checks the artefact
+# semantically and specifically refuses to supply what the backup should carry
+# (its first version hand-created the roles and would have passed forever while
+# the artefact was missing them), and the weekly drill restores and reaches a
+# Workspace serving `GET /login` — which needs the schema present and the role
+# layer intact. `migration_heads` is NOT known to be checked by that drill; it
+# is declared because a restore that cannot say which revisions it is at cannot
+# be reasoned about, and naming the gap beats quietly declaring less.
+verify = ["schema", "row_counts", "migration_heads"]
+
 # ── telemetry ────────────────────────────────────────────────────────────────
 
 [telemetry]

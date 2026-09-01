@@ -456,3 +456,169 @@ def test_the_descriptor_passes_the_pinned_facilitys_own_checks() -> None:
     for finding in permitted:
         findings.remove(finding)
     assert findings == [], findings
+
+
+# ── the externally executed recovery contract ───────────────────────────────
+#
+# Michael's acceptance contract, 2026-09-01:
+#
+#   Workspace owns and declares its logical PostgreSQL dataset. The fleet
+#   recovery facility owns execution. A typed receipt binds checksum,
+#   verification results, isolated restore proof, and freshness. The shared
+#   physical host is INVENTORY, not dataset identity.
+#
+#   Acceptance must FAIL when the executor is only prose, when the receipt is
+#   absent or stale, or when verification omits any of: roles, ownership,
+#   memberships, effective privileges, migration heads, schema, or data.
+
+RECOVERY_VERIFICATIONS = (
+    "roles",
+    "ownership",
+    "memberships",
+    "effective_privileges",
+    "migration_heads",
+    "schema",
+    "data",
+)
+
+
+def test_the_workspace_declares_its_logical_dataset() -> None:
+    """The half of the split that a2 CAN carry, and that must not regress.
+
+    An absent `[backup]` is not silence — the facility reads it as "a claim that
+    nothing needs backing up", and the Workspace has durable PostgreSQL state.
+    """
+    datasets = _descriptor()["backup"]["datasets"]
+    assert len(datasets) == 1
+    dataset = datasets[0]
+    assert dataset["kind"] == "postgres"
+    assert dataset["retention_days"] >= 1
+    assert dataset["checksum"] == "sha256"
+    assert dataset["restore_proof_max_age_days"] <= 7
+
+    # The executing owner's credential, and it must never become a runtime one:
+    # no Workspace container may hold a DSN that can read every row of every
+    # table.
+    materials = set(_descriptor()["runtime_materials"]["names"])
+    assert dataset["material"] not in materials
+
+
+def test_the_physical_host_is_inventory_and_not_dataset_identity() -> None:
+    """The dataset is the database, never the box it happens to sit on.
+
+    A declaration that encoded the host breaks the day the database moves — and
+    the move is a fact about operations, not about the dataset. Checked over the
+    whole descriptor rather than the backup table alone, because the leak would
+    most naturally arrive as a comment.
+    """
+    hosts = _real_hosts_in([DESCRIPTOR], REPO)
+    assert not hosts, f"the descriptor names infrastructure: {hosts!r}"
+    text = DESCRIPTOR.read_text(encoding="utf-8")
+    for inventory in ("db-primary", "94.72.104.67"):
+        assert inventory not in text, (
+            f"{inventory!r} is inventory. The dataset is identified logically; "
+            "where it runs belongs to the environment inventory."
+        )
+
+
+def test_foundation_a2_cannot_bind_the_recovery_contract() -> None:
+    """MEASUREMENT: exactly which typed fields the published contract lacks.
+
+    This passes today. It is what makes the failing acceptance test below a
+    named contract gap rather than an opinion, and it inverts the moment the
+    Foundation gains the fields — at which point the declaration must be
+    completed rather than the gap re-recorded.
+    """
+    import dataclasses
+
+    from dotmac_deployment_foundation.errors import SpecError
+    from dotmac_deployment_foundation.spec import BackupDataset, ProductDeploymentSpec
+
+    fields = {field.name for field in dataclasses.fields(BackupDataset)}
+    assert "executed_by" not in fields and "executor" not in fields, (
+        "the published contract now has an executor field — bind it in "
+        "deploy/product.toml and delete this measurement"
+    )
+    assert not {
+        name for name in fields if "receipt" in name
+    }, "the published contract now has a receipt field — bind it"
+
+    # Four of the seven verification elements are refused AT PARSE TIME, not
+    # merely absent. Observed, so the claim cannot rot into an assumption.
+    assert BackupDataset.VERIFICATIONS == ("schema", "row_counts", "migration_heads")
+    base = DESCRIPTOR.read_text(encoding="utf-8")
+    for element in ("roles", "ownership", "memberships", "effective_privileges"):
+        document = base.replace(
+            'verify = ["schema", "row_counts", "migration_heads"]',
+            f'verify = ["schema", "row_counts", "migration_heads", "{element}"]',
+        )
+        with pytest.raises(SpecError, match="unknown verification"):
+            ProductDeploymentSpec.loads(document, source="probe")
+
+    # And no receipt reaches the gate. Asserted through the public surface —
+    # the parser's own usage refusal — rather than by reaching into argparse
+    # internals: `dotmac-deploy backup` accepts no option at all, so there is
+    # nowhere for a receipt to enter and nothing for acceptance to judge stale.
+    from dotmac_deployment_foundation.cli import build_parser
+
+    parser = build_parser()
+    assert parser.parse_args(["backup"]).descriptor is not None
+    for candidate in ("--receipt", "--records", "--observed"):
+        with pytest.raises(SystemExit) as usage:
+            parser.parse_args(["backup", candidate, "x"])
+        assert usage.value.code == 2, (
+            f"`dotmac-deploy backup {candidate}` is accepted now — if it "
+            "supplies a receipt, wire it into the gate and complete the "
+            "declaration"
+        )
+
+
+# THIS TEST FAILS, DELIBERATELY, AND IT IS WHY PR #17 IS RED.
+#
+# It is not an oversight and it is not xfail'd. An `xfail` would record the gap
+# and let the suite go green, and a green suite would present this adoption as
+# finished while the recovery contract is unbound — which is the one outcome
+# Michael ruled out. A red build at a named, measured gap is the intended state.
+#
+# It fails because `dotmac-deployment-foundation` 0.2.0a2 cannot bind an
+# externally executed recovery contract, proven immediately above:
+#
+#   - no executor field (`executed_by` is refused as an unknown key);
+#   - no receipt field on `[backup]` or on a dataset, and no receipt input to
+#     the gate — so acceptance can never fail on an absent or stale one;
+#   - four of the seven required verification elements (roles, ownership,
+#     memberships, effective privileges) are REFUSED AT PARSE TIME.
+#
+# It is closed by a change to the PUBLISHED contract — never by borrowing the
+# unpublished 0.3.0a1 types, and never by a Workspace-only encoding that
+# satisfies this file's text while misdescribing who executes the backup. See
+# deploy/README.md, "The recovery contract gap", for the smallest change that
+# would close it.
+#
+# When that lands, this test passes on its own and the declaration in
+# deploy/product.toml must be completed in the same change.
+def test_the_externally_executed_recovery_contract_is_fully_bound() -> None:
+    """ACCEPTANCE. Every element bound by a typed field the gate can check.
+
+    Deliberately written against the contract Michael specified rather than
+    against what the tool happens to support, so the shortfall is measured in
+    one place and in the vocabulary of the requirement.
+    """
+    dataset = _descriptor()["backup"]["datasets"][0]
+
+    # The executor, bound — a named owner that no typed field binds is not an
+    # executor.
+    assert dataset.get("executed_by"), "no typed field binds the executing owner"
+
+    # The receipt, bound and fresh — checksum, verification results, isolated
+    # restore proof and freshness.
+    receipt_ref = dataset.get("receipt")
+    assert receipt_ref, "no typed field binds the recovery receipt"
+    receipt = json.loads((REPO / receipt_ref).read_text(encoding="utf-8"))
+    for element in ("checksum", "verifications", "restore_proof", "produced_at"):
+        assert element in receipt, f"the receipt does not carry {element}"
+
+    # Verification covers all seven.
+    declared = set(dataset["verify"])
+    missing = [item for item in RECOVERY_VERIFICATIONS if item not in declared]
+    assert not missing, f"verification omits {missing}"
