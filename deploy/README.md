@@ -197,31 +197,67 @@ reads as having no access and the assertion goes green over exactly the leak it
 exists to detect. `roles`, `ownership`, `memberships` and `effective_privileges`
 are the four elements that catch that class, and they are the four a2 refuses.
 
-### The smallest published-contract change that would close it
+### What must happen next — and the measurement that comes FIRST
 
-Additive, so no existing descriptor breaks — which by the facility's own version
-rule makes it a MINOR release rather than a major:
+**This gap report is a specification for a future Foundation release. It is not
+a green light to design one yet.**
+
+The refusals recorded above were measured against the **published `0.2.0a2`**.
+There is a **frozen `0.3.0a2` candidate wheel**, and a published artefact's
+refusal does not prove a different artefact has the same gap — the candidate may
+already carry part of the contract. It is being measured on a separate read-only
+lane. **Do not modify or rebuild that candidate, and do not duplicate that
+measurement here.** Only if it lacks these properties does a new release need
+designing.
+
+### The requirements, if the candidate lacks them
+
+Additive, so no existing descriptor breaks — a MINOR release by the facility's
+own version rule.
 
 1. **`BackupDataset.VERIFICATIONS` gains four members** — `roles`, `ownership`,
    `memberships`, `effective_privileges`. Widening an allow-list breaks no
    descriptor that parses today.
-2. **`BackupDataset.executed_by`** — an optional owner code, defaulting to the
-   deployment itself, with the values that mean "this deployment's `Effects`"
-   and "an external facility". When it names an external owner, the derived plan
-   should omit the `backup` and `verify_backup` steps rather than attributing
-   them to an executor that will never run.
-3. **A receipt binding.** `BackupDataset.receipt` naming a file, plus a
-   `RecoveryReceipt.v1` shape carrying the dataset, the write-time checksum, a
-   verification result per declared element, an isolated-restore proof and a
-   `produced_at`. Then `dotmac-deploy backup` reads it and **refuses on an
-   absent or stale one**, which is what makes `restore_proof_max_age_days`
-   enforceable instead of decorative.
-4. **A cadence field** — `BackupDataset.interval_seconds`, so `assess()` stops
-   taking the interval as a caller argument defaulting to a day for a dataset
-   dumped hourly.
+2. **A TYPED executor identity — never a free-text owner.** A string field would
+   reproduce the defect it is meant to fix: an owner nothing can check is prose
+   wearing a field's clothes, and two deployments would spell the same facility
+   two ways.
+3. **`RecoveryReceipt.v1`, SIGNED**, and bound to all five of: the dataset, the
+   **descriptor digest**, the snapshot checksum, the **executor identity and
+   version**, and the **exact verification set**. A receipt that names its own
+   contents but not the contract it was produced against cannot be checked
+   against anything.
+4. **The receipt is bound EXPLICITLY** — an argument or a material binding, with
+   **no ambient discovery**. A gate that goes looking for a receipt will
+   eventually find a stale one, or none, and report the same colour either way.
+5. **An external execution plan carries `verify_external_recovery_receipt`**,
+   not a `backup` step falsely attributed to this deployment. This is exactly
+   the omission recorded above: today the derived plan lists `backup` and
+   `verify_backup` as steps of a deployment that will never run them.
+6. **Cadence, named by its meaning** — `expected_backup_interval_seconds`, not
+   an ambiguous `interval_seconds`.
+7. **The maximum acceptable backup-record age, defined SEPARATELY.**
 
-Points 3 and 4 are where the real value is: without them
-`restore_proof_max_age_days` is a bound with nothing to evaluate against.
+**Points 6 and 7 are two controls, not one, and an earlier draft of this file got
+that wrong by proposing a single `interval_seconds`.** Cadence and restore-proof
+freshness are independent failures: a dataset dumped hourly with a three-week-old
+restore proof is compliant on cadence and broken on freshness, and a single field
+would let a reader — and a future gate — conflate them. The measurement above is
+itself the evidence: `restore_proof_max_age_days` is inert *not* because the
+cadence is unstated but because `assess()` only judges freshness from
+`BackupRecord`s nothing supplies. Fixing the cadence would not have fixed that.
+
+### The sequence
+
+1. Measure the frozen `0.3.0a2` candidate against the requirements above.
+2. Only if it falls short: design and publish a release carrying them.
+3. The release is **independently verified**.
+4. Workspace repins, declares its logical dataset **and its typed external
+   executor**, binds a real receipt, and reruns this PR **at one exact head**.
+
+Nothing before step 4 changes PR #17, and the failing acceptance test stays
+exactly as it is until then: no `xfail`, no exemption, no local receipt type, no
+borrowed unpublished contract.
 
 **Not done, on purpose:** the unpublished `0.3.0a1` carries `RehearsalReceipt.v1`
 and `DeploymentProvenance.v1`. Borrowing them would pin a consumer to types no
