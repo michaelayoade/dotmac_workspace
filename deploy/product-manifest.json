@@ -1,0 +1,1 @@
+{"modules":[{"code":"application_directory","declared_planes":["tenant"],"distribution":"dotmac-application-directory","effective_planes":["tenant"],"explicit_planes":null,"version":"0.1.0a3"}],"product":"dotmac-workspace","schema":"dotmac.product-assembly-manifest.v1"}

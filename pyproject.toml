@@ -157,6 +157,26 @@ pytest = "^8.3"
 pyjwt = { version = "^2.13", extras = ["crypto"] }
 ruff = "^0.6"
 mypy = "^1.11"
+# The stateless build- and deploy-time facility (Starter ADR-0070). EXACT pin,
+# from the private index, and dev-only: it renders `deploy/rendered/` and never
+# ships in the runtime image.
+#
+# Exact rather than a caret for a reason the package states about itself: its
+# RENDERED BYTES and its CLI EXIT CODES are public contract, and `render --check`
+# is a byte comparison. A range could therefore change what a deployment runs
+# with no diff in this repository at all.
+#
+# 0.2.0a2 is the PUBLISHED release: this lock resolved it from
+# registry.dotmac.io and `poetry.lock` carries the wheel and sdist hashes it
+# returned. The Starter tree also holds a later 0.3.0a1 whose own README says it
+# is "not published, not installed from an index, and not pinned by any
+# product" — a version on `main` is not evidence that it is pinnable
+# (AGENTS.md rule 30, and the same rule Starter states as rule 26).
+#
+# `.github/workflows/deployment-conformance.yml` states the SAME version to the
+# reusable gate, and `tests/test_deployment_descriptor.py` fails if the two ever
+# disagree.
+dotmac-deployment-foundation = { version = "0.2.0a2", source = "forgejo" }
 
 [tool.ruff]
 line-length = 88

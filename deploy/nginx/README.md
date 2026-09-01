@@ -11,8 +11,15 @@ took the service down.
 ## Render
 
 ```sh
-make nginx-render > /tmp/workspace.conf
+make nginx-render NGINX_PUBLIC_HOST=<the host this deployment serves> > /tmp/workspace.conf
 ```
+
+`NGINX_PUBLIC_HOST` has **no default**, and the refusal is deliberate. It used
+to default to the production host, which is how a reusable artefact quietly
+becomes about one deployment — the host belongs to the deployment's inventory,
+not to this repository. `tests/test_deployment_descriptor.py` fails if a real
+host name is ever committed back into a deployment artefact, and proves it by
+planting one.
 
 Or directly — note that `envsubst` is **restricted to the two placeholders**.
 Unrestricted, it also substitutes nginx's own `$host`, `$scheme`, `$remote_addr`
@@ -40,7 +47,7 @@ copy.
 ## Install
 
 ```sh
-make nginx-render > /tmp/workspace.conf
+make nginx-render NGINX_PUBLIC_HOST=workspace.dotmac.io > /tmp/workspace.conf
 scp /tmp/workspace.conf root@workspace.dotmac.io:/etc/nginx/sites-available/workspace.dotmac.io
 ssh root@workspace.dotmac.io 'nginx -t && systemctl reload nginx'
 ```

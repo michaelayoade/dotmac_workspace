@@ -26,7 +26,26 @@
 
 services:
   workspace:
-    image: ${WORKSPACE_IMAGE:-registry.dotmac.io/dotmac/workspace}:${WORKSPACE_TAG:-latest}
+    # AN IMMUTABLE DIGEST, OR NOTHING. No tag, and no default.
+    #
+    # This read `${WORKSPACE_IMAGE:-registry.dotmac.io/dotmac/workspace}:${WORKSPACE_TAG:-latest}`
+    # until the deployment-foundation adoption. A tag is a registry POINTER: it
+    # can be repushed after the bytes it named were tested, so "the image we
+    # verified" and "the image this host runs" were two different facts that
+    # looked identical in every log — and a bare `docker compose up -d` on a
+    # host with no `.env` silently took whatever `:latest` meant that morning.
+    # `WORKSPACE_TAG` is retired; there is nothing left here to float on.
+    #
+    # The value is not typed by hand either. `deploy/rendered/docker-compose.yml`
+    # — rendered from `deploy/product.toml` and byte-checked in CI — is the
+    # authority for WHICH image production runs, and
+    # `scripts/resolve_deploy_image.sh` is how it gets here:
+    #
+    #     WORKSPACE_IMAGE="$(scripts/resolve_deploy_image.sh)" docker compose up -d
+    #
+    # That script refuses anything that is not `name@sha256:<64 hex>`, and
+    # refuses the all-zero placeholder by name. An unset value refuses here.
+    image: ${WORKSPACE_IMAGE:?set it from scripts/resolve_deploy_image.sh — a digest, never a tag}
     restart: unless-stopped
     # Published on loopback only. TLS termination and the public name belong to
     # the reverse proxy; a container port on 0.0.0.0 bypasses ufw entirely
