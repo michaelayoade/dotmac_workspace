@@ -206,7 +206,7 @@ def test_a_refused_acquisition_cannot_leave_a_partial_wheelhouse_in_the_cache() 
     planted = dict(save)
     planted["timeout-minutes"] = 5
     assert not _conditional(planted)
-    assert not _conditional({"run": "if [ -z \"$X\" ]; then exit 2; fi"})
+    assert not _conditional({"run": 'if [ -z "$X" ]; then exit 2; fi'})
     # And the key name really is readable as written: PyYAML does not fold `if`
     # the way it folds the bare `on` key this module has to work around.
     assert "if" in _job(), "the job's own `if:` is how that is established"
