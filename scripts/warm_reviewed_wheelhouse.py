@@ -39,7 +39,7 @@ import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 API = "https://api.github.com"
 MAIN_REF = "refs/heads/main"
@@ -86,6 +86,13 @@ CHILD_ENV_KEYS = (
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
     "REQUESTS_CA_BUNDLE",
+    # Not cargo: `actions/setup-python` builds its toolcache interpreters
+    # `--enable-shared` and exports `LD_LIBRARY_PATH=<toolcache>/lib` on Linux.
+    # Whether `sys.executable -m pip` starts without it depends on that build's
+    # rpath, and if it does not the child dies before pip runs — surfacing only
+    # as the fixed `acquisition failed for <name>` message, which is fixed
+    # precisely so it cannot relay the cause. It carries no secret.
+    "LD_LIBRARY_PATH",
 )
 
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
@@ -130,15 +137,16 @@ def _host(url: str) -> str:
 def _refuse_a_decorated_index(url: str) -> None:
     """A private index URL is a bare https origin and path — nothing else.
 
-    `acquire` injects the credential by splicing `ci-reader:<token>@` in after
-    the scheme. If the lock's own URL already carries userinfo, the splice
-    produces `https://ci-reader:TOKEN@someone@registry.dotmac.io/simple`: a
-    second `@`, after which what the request actually resolves to is the
-    parser's opinion rather than this module's. A port is refused for the same
-    reason — the allowlist admits a HOST, and that host on another port is a
-    different endpoint than the one that was admitted. Refused here, where the
-    plan is built from lock data, so it is a data-shape refusal and not a
-    surprise in the one step that holds the credential.
+    `acquire` injects the credential by REBUILDING the URL from the hostname it
+    validated, so a decorated netloc cannot survive that step structurally. This
+    refusal is the other half, and it is about the lock rather than the splice:
+    a private source URL carrying userinfo is not a shape this workflow has any
+    reason to accept, and `https://someone@registry.dotmac.io/simple` passes the
+    host allowlist because the trusted name IS the hostname. A port is refused
+    for the same reason — the allowlist admits a HOST, and that host on another
+    port is a different endpoint than the one that was admitted. Refused here,
+    where the plan is built from lock data, so it is a data-shape refusal and
+    not a surprise in the one step that holds the credential.
     """
     parsed = urlsplit(url)
     if parsed.username:
@@ -401,6 +409,13 @@ def acquire(
     That environment is CONSTRUCTED from `CHILD_ENV_KEYS` rather than inherited,
     so the step's own copy of the registry token is not handed to pip a second
     time as a plain variable it has no use for.
+
+    The surplus sweep runs after the whole loop, so a refusal partway through
+    leaves verified wheels at the destination. That is only harmless because the
+    workflow's cache-save step carries no `if:` and no `continue-on-error`: a
+    non-zero exit means nothing is saved, so a partially populated destination
+    is never observable. `tests/test_wheelhouse_warm_workflow.py` pins that
+    premise, because it lives in a file this module cannot see.
     """
     if not credential:
         raise WarmRefused("registry credential unavailable")
@@ -428,7 +443,26 @@ def acquire(
         if host not in PRIVATE_HOSTS | PUBLIC_HOSTS:
             raise WarmRefused(f"refusing to contact unallowed host {host!r}")
         if host in PRIVATE_HOSTS:
-            index = f"https://ci-reader:{credential}@{index[len('https://') :]}"
+            # Rebuilt, not spliced. String-slicing after `https://` carries the
+            # lock's own netloc through verbatim, so a URL that arrived with
+            # userinfo would become `https://ci-reader:TOKEN@someone@host/...`
+            # — two `@`, and which one the request honours is the parser's
+            # opinion. The netloc here is composed from `host`, which is
+            # `_host`'s validated, lowercased hostname and nothing else, so any
+            # username, password or port in the source URL is dropped by
+            # construction rather than by a check that could be skipped.
+            # `urlunsplit` passes the netloc through unaltered, so the
+            # credential's bytes are exactly what was handed in.
+            parsed = urlsplit(index)
+            index = urlunsplit(
+                (
+                    "https",
+                    f"ci-reader:{credential}@{host}",
+                    parsed.path,
+                    parsed.query,
+                    parsed.fragment,
+                )
+            )
         with tempfile.TemporaryDirectory() as staging:
             env = {key: os.environ[key] for key in CHILD_ENV_KEYS if key in os.environ}
             env["PIP_INDEX_URL"] = index

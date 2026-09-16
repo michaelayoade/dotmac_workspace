@@ -271,14 +271,22 @@ def test_a_registry_host_outside_the_allowlist_refuses() -> None:
     # Built by concatenation: the middle case is the one that matters and a
     # literal would read as an address rather than as a URL with USERINFO.
     userinfo = "https://registry.dotmac.io" + "@" + "evil.example/simple"
-    for hostile in (
-        "https://evil.example/simple",
-        "https://registry.dotmac.io.evil.example/simple",
-        userinfo,
-        "https://registry.dotmac.io" + "@" + "evil.example:443/simple",
-        "http://registry.dotmac.io/simple",
+    # Every case pins the message of the guard it names. Without `match=`, the
+    # userinfo and `:443` cases could now be answered by `_refuse_a_decorated_index`
+    # ("carries a username"/"carries a port") instead of by the allowlist, and
+    # the test would read as proving something it had stopped proving.
+    for hostile, message in (
+        ("https://evil.example/simple", "unallowed host"),
+        ("https://registry.dotmac.io.evil.example/simple", "unallowed host"),
+        (userinfo, "unallowed host"),
+        (
+            "https://registry.dotmac.io" + "@" + "evil.example:443/simple",
+            "unallowed host",
+        ),
+        # `_host` refuses a non-https URL before it can have a host at all.
+        ("http://registry.dotmac.io/simple", "index url is not https"),
     ):
-        with pytest.raises(warm.WarmRefused):
+        with pytest.raises(warm.WarmRefused, match=message):
             warm.build_plan(MANIFEST, _lock(hostile))
 
     # Near miss: the real host, with the real path, is accepted. Without this
@@ -294,11 +302,17 @@ def test_a_private_index_url_carrying_userinfo_or_a_port_refuses() -> None:
     The host allowlist above is not sufficient on its own, because
     `urlsplit("https://someone@registry.dotmac.io/simple").hostname` IS the
     allowed registry — the URL passes the host check while still carrying
-    userinfo. `acquire` then splices the credential in after the scheme and
-    produces `https://ci-reader:TOKEN@someone@registry.dotmac.io/simple`, a URL
-    with two `@` whose resolution is the parser's opinion rather than this
-    module's. A port is refused alongside it because the allowlist admits a
+    userinfo. A port is refused alongside it because the allowlist admits a
     host, and that host on another port is a different endpoint.
+
+    This is a LOCK-SHAPE refusal, and deliberately not the only thing standing
+    between a decorated URL and the credential splice: `acquire` now rebuilds
+    the index URL from the hostname it validated rather than slicing the string
+    after `https://`, so a decorated netloc cannot survive that step even if a
+    plan reached it without passing through here. See
+    `test_the_credential_splice_cannot_be_decorated_by_the_plan_it_is_handed`,
+    which drives exactly that case. Two independent mechanisms, and this test
+    pins only the first.
 
     The password case deliberately carries no username, so that the username
     refusal cannot answer for it and each `match=` reaches its own guard.
@@ -307,6 +321,12 @@ def test_a_private_index_url_carrying_userinfo_or_a_port_refuses() -> None:
         ("https://someone@registry.dotmac.io/simple", "carries a username"),
         ("https://:sekrit@registry.dotmac.io/simple", "carries a password"),
         ("https://registry.dotmac.io:8443/simple", "carries a port"),
+        # The fourth branch. `urlsplit("https://registry.dotmac.io:abc/simple")
+        # .hostname` succeeds and returns the ALLOWED registry — `hostname` does
+        # not validate the port component — so `_host` admits this URL and only
+        # `parsed.port` raises. That is the entire reason the `except ValueError`
+        # branch exists, and without this case it had no test at all.
+        ("https://registry.dotmac.io:abc/simple", "unreadable port"),
     ):
         with pytest.raises(warm.WarmRefused, match=message):
             warm.build_plan(MANIFEST, _lock(hostile))
@@ -373,6 +393,69 @@ def test_a_lock_name_that_would_read_as_a_pip_option_refuses() -> None:
     # Near miss: a real name and a real pre-release version are accepted.
     plan = warm.build_plan(MANIFEST, _lock())
     assert plan["dotmac-kernel"]["version"] == "0.1.0a97"
+
+
+def test_a_lock_supplied_wheel_filename_cannot_forge_a_workflow_command() -> None:
+    """BREAK CONDITION: remove the `!r` from the `does not belong to` refusal in
+    `build_plan`.
+
+    The refusal message is printed to the job log by `main`. A GitHub Actions
+    workflow command is a LINE beginning `::`, so a value carrying a newline and
+    a `::` token splits the refusal into two log lines, the second of which the
+    runner parses as a command rather than as text — `::error::`, `::notice::`,
+    or `::add-mask::` applied to something chosen by whoever wrote the lock. The
+    lock is contributor-supplied, so this is reachable by anyone who can open a
+    pull request that a reviewer then dispatches a warm for.
+
+    `!r` is the fix: `repr` escapes the newline to a literal backslash-n, so the
+    whole refusal stays one line and nothing in it can begin a line with `::`.
+
+    The fixture is built to REACH that guard rather than die earlier. A TOML
+    backslash-n escape makes it a valid basic string; the value still ends in
+    `.whl`, so the `endswith` skip does not take it; `Path(filename).name ==
+    filename` still holds, so the traversal check does not answer; the hash is
+    well-formed. `WHEEL_RE` is the first thing that can refuse it.
+    """
+    hostile = "x\\n::warning::forged\\npytest-8.3.3-py3-none-any.whl"
+    with pytest.raises(warm.WarmRefused, match="does not belong to") as raised:
+        warm.build_plan(MANIFEST, _lock(pytest_wheel=hostile))
+
+    message = str(raised.value)
+    assert "\n" not in message, message
+    assert not any(line.startswith("::") for line in message.splitlines())
+    # And the guard is not passing because the value was dropped: the offending
+    # text is present, escaped, so a reviewer reading the log can still see it.
+    assert "::warning::forged" in message
+
+
+def test_a_pre_scope_manifest_name_cannot_forge_a_workflow_command() -> None:
+    """BREAK CONDITION: remove the `!r` from the `outside the private package
+    scope` refusal in `build_plan`.
+
+    Same log-forging mechanism as above, on the other contributor-supplied file.
+    This name is interpolated BEFORE `NAME_RE` has ever seen it — `NAME_RE` runs
+    over lock package names, not manifest keys, and `PRIVATE_SCOPE` is what
+    refuses here — so the only thing constraining the text at this point is
+    whatever TOML accepts as a key, which includes a quoted key holding a
+    newline.
+
+    The fixture reaches the guard because `dotmac-kernel` is declared first and
+    passes; the hostile key is the second entry with a `source`, so the scope
+    check is what answers, not an absent-from-lock refusal further down.
+    """
+    manifest = MANIFEST.replace(
+        b'pytest = "^8.3"',
+        b'"pytest\\n::warning::x" = { version = "8.3.3", source = "forgejo" }',
+    )
+    with pytest.raises(
+        warm.WarmRefused, match="outside the private package scope"
+    ) as raised:
+        warm.build_plan(manifest, _lock())
+
+    message = str(raised.value)
+    assert "\n" not in message, message
+    assert not any(line.startswith("::") for line in message.splitlines())
+    assert "::warning::x" in message
 
 
 def test_acquisition_refuses_to_contact_a_host_outside_the_allowlist(
@@ -544,6 +627,56 @@ def test_the_credential_never_appears_in_the_downloader_argv(tmp_path: Path) -> 
     assert len(private) == 1 and len(public) == 1
 
 
+def test_the_credential_splice_cannot_be_decorated_by_the_plan_it_is_handed(
+    tmp_path: Path,
+) -> None:
+    """BREAK CONDITION: build the credentialed URL by string-slicing after
+    `https://` — `f"https://ci-reader:{credential}@{index[len('https://'):]}"`.
+
+    `acquire`'s docstring claims it re-checks rather than trusting a plan handed
+    to it, and it does re-check the HOST — but the host check is not what
+    protects the splice. `urlsplit("https://someone@registry.dotmac.io/simple")
+    .hostname` is the allowed registry, so a hand-built plan carrying that URL
+    passes the whole-plan screen and the per-entry re-check, and the slicing
+    form then carries `someone@` through verbatim into
+    `https://ci-reader:TOKEN@someone@registry.dotmac.io/simple` — two `@`, and
+    which authority the request honours is the parser's opinion, not this
+    module's.
+
+    `build_plan` refuses that URL, so this is not live against a plan built from
+    lock bytes. The point is that the stated invariant should not depend on one
+    caller: the rebuilt form composes the netloc from `host` alone, so anything
+    else in the source URL's authority is dropped by CONSTRUCTION. A test that
+    only exercised `build_plan` would keep passing with the slicing form
+    restored, which is precisely why this one drives `acquire` directly.
+    """
+    secret = "s3cr3t-registry-token"
+    decorated = "https://someone" + "@" + "registry.dotmac.io/simple"
+    plan = {
+        "dotmac-kernel": {
+            "version": "0.1.0a97",
+            "index": decorated,
+            "wheels": {KERNEL_WHEEL: hashlib.sha256(b"kernel-wheel").hexdigest()},
+        }
+    }
+    envs: list[dict[str, str]] = []
+    inner = _runner({KERNEL_WHEEL: b"kernel-wheel"})
+
+    def run(argv, **kwargs):
+        envs.append(dict(kwargs["env"]))
+        return inner(argv, **kwargs)
+
+    warm.acquire(plan, tmp_path / "wheelhouse", secret, runner=run)
+
+    assert len(envs) == 1
+    url = envs[0]["PIP_INDEX_URL"]
+    assert url.count("@") == 1, url
+    assert url == f"https://ci-reader:{secret}@registry.dotmac.io/simple"
+    # The lock's userinfo is gone, and the host pip is pointed at is the one the
+    # allowlist admitted rather than whatever the second `@` would have chosen.
+    assert "someone" not in url
+
+
 def test_the_downloader_gets_a_constructed_environment_not_the_jobs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -571,7 +704,30 @@ def test_the_downloader_gets_a_constructed_environment_not_the_jobs(
     plan = warm.build_plan(MANIFEST, _lock())
     warm.acquire(plan, tmp_path / "wheelhouse", secret, runner=run)
 
-    allowed = set(warm.CHILD_ENV_KEYS) | {
+    # DELIBERATE DUPLICATION. Writing this as `set(warm.CHILD_ENV_KEYS) | {...}`
+    # makes the test agree with itself: adding a name to `CHILD_ENV_KEYS` widens
+    # `allowed` in the same motion, so `set(env) <= allowed` can never notice the
+    # allowlist growing and the only remaining backstop is the `secret in value`
+    # check below, which catches exactly the one name this test monkeypatches. A
+    # literal turns any widening of the child's environment into a diff in this
+    # file that a reviewer has to approve on purpose.
+    allowed = {
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "LD_LIBRARY_PATH",
+        "PIP_INDEX_URL",
+        "PIP_CONFIG_FILE",
+        "PIP_NO_INPUT",
+    }
+    # The other direction: the module must not QUIETLY DROP a key either, which
+    # a subset assertion alone would never see.
+    assert set(warm.CHILD_ENV_KEYS) == allowed - {
         "PIP_INDEX_URL",
         "PIP_CONFIG_FILE",
         "PIP_NO_INPUT",

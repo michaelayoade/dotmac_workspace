@@ -162,6 +162,56 @@ def test_the_cache_is_saved_under_the_bound_key_and_only_the_wheelhouse() -> Non
     assert "restore-keys" not in with_, "a prefix restore would defeat the exact key"
 
 
+def test_a_refused_acquisition_cannot_leave_a_partial_wheelhouse_in_the_cache() -> None:
+    """BREAK CONDITION: add `if: always()` (or `if: success() || failure()`, or
+    `continue-on-error: true`) to the cache-save step, or to the acquire step.
+
+    `acquire` copies each verified wheel to the destination as it goes and only
+    sweeps for surplus entries AFTER the whole loop, so a refusal partway
+    through — a hash that disagrees with the lock, a wheel the lock does not
+    name — leaves a DIRECTORY holding some of the wheels and not others. Nothing
+    in the script removes it, and nothing needs to, because this step is the
+    only thing that would make it observable: a non-zero exit from acquire ends
+    the job and an unconditional step does not run, so the partial directory is
+    discarded with the runner.
+
+    That is a premise about a file the script cannot see, which is why it is
+    asserted here. Adding `if: always()` would save a cache entry under the
+    exact dependency key describing a wheelhouse that is missing wheels — and a
+    later CI run restoring that key would get a silent partial hit, not a miss.
+    Whoever adds it should be told what it breaks.
+    """
+    steps = _job()["steps"]
+    save = next(step for step in steps if str(step.get("uses", "")) == CACHE_SAVE)
+    assert "if" not in save, "an unconditional save is what makes a refusal discard"
+    assert "continue-on-error" not in save
+
+    acquire = next(s for s in steps if s["name"] == "Acquire the locked wheels")
+    assert "continue-on-error" not in acquire, "a refusal must fail the job"
+    # Sensitivity. A check over a clean tree proves nothing about itself, so
+    # plant the defect and show the predicate names it, and plant a near miss
+    # and show it does not. `_conditional` is the exact predicate applied above.
+
+    def _conditional(step: dict[str, Any]) -> bool:
+        return "if" in step or "continue-on-error" in step
+
+    planted = dict(save)
+    planted["if"] = "always()"
+    assert _conditional(planted)
+    planted = dict(save)
+    planted["continue-on-error"] = True
+    assert _conditional(planted)
+    # Near miss: a step gaining an unrelated key, or shell text containing the
+    # word "if", is not the defect and must not be named as one.
+    planted = dict(save)
+    planted["timeout-minutes"] = 5
+    assert not _conditional(planted)
+    assert not _conditional({"run": "if [ -z \"$X\" ]; then exit 2; fi"})
+    # And the key name really is readable as written: PyYAML does not fold `if`
+    # the way it folds the bare `on` key this module has to work around.
+    assert "if" in _job(), "the job's own `if:` is how that is established"
+
+
 def test_every_action_is_pinned_to_a_full_forty_character_commit() -> None:
     """BREAK CONDITION: pin to a tag, a branch, or an abbreviated SHA.
 
