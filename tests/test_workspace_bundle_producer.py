@@ -112,7 +112,8 @@ def test_workflow_has_protected_fetch_and_pinned_actions() -> None:
     assert 'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"' in workflow
     assert "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97" in workflow
     assert "python-version: '3.12'" in workflow
-    assert "secrets.FORGEJO_READ_TOKEN" in workflow
+    assert "secrets.FORGEJO_BUNDLE_READ_TOKEN" in workflow
+    assert "secrets.FORGEJO_READ_TOKEN" not in workflow
     assert "ci-reader:" in workflow
     assert "upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0" in workflow
     assert (

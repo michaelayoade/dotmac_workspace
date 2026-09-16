@@ -209,6 +209,9 @@ from the verified offline index. A missing or unpublished pin fails at producer
 acquisition or candidate verification; neither is worked around with a path
 dependency. The `from-wheel` job still installs the built Workspace wheel into
 a clean virtualenv and boots without the checkout on its import path.
+The producer's `FORGEJO_BUNDLE_READ_TOKEN` must exist only as an environment
+secret. It intentionally has a different name from historical repository
+secrets, so a missing environment projection cannot silently fall back to one.
 
 ## 6a. Compose the ecosystem packages; never hand-roll what one owns
 

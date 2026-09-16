@@ -33,7 +33,8 @@ jobs:
 
       - name: Download and verify wheels
         env:
-          PIP_INDEX_URL: https://ci-reader:${{ secrets.FORGEJO_READ_TOKEN }}@registry.dotmac.io/api/packages/dotmac/pypi/simple
+          # Unique to this environment: never fall back to a repository secret.
+          PIP_INDEX_URL: https://ci-reader:${{ secrets.FORGEJO_BUNDLE_READ_TOKEN }}@registry.dotmac.io/api/packages/dotmac/pypi/simple
         run: >-
           python scripts/workspace_bundle_producer.py
           --plan expected-dependencies.json
