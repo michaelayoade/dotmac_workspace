@@ -206,6 +206,20 @@ protected-main bundle against `poetry.lock`, then installs those wheels into
 the clean virtualenv without a registry secret. An unpublished pin fails at
 protected acquisition or bundle verification; no path dependency is admitted.
 
+**2026-09-16 interim cutover amendment.** The protected-main job instead warms
+a wheelhouse cache of the locked dependencies. Candidate CI treats the cache as
+untrusted delivery: it requires an exact manifest-and-lock key, verifies wheel
+bytes against `poetry.lock`, rejects missing or extra wheels, and installs
+offline without a registry credential. The former bound-bundle path above is
+retired by this cutover. A lock change requires an administrator-reviewed
+`wheelhouse-warm.yml` dispatch on main for the exact PR head; that workflow
+reads the manifest and lock only as data and never executes candidate code.
+The reliability cost of a missing warm is explicit and does not authorize a
+candidate-side registry fetch.
+PR CI also refuses a merge result whose manifest or lock differs from that
+reviewed head. When main changes either file, update and re-review the PR head,
+then warm its new exact SHA before rerunning CI.
+
 One shape change in 0.1.0a2 that this repository already accommodates: its
 lineage root declares `requires=("tenant_scope_catalog.v1",
 "module_database_roles.v1")` instead of naming a foreign revision, so the
@@ -237,7 +251,9 @@ Added:
   `tests/db`), and **from-wheel** (build the wheel, install it into a clean
   virtualenv, boot it from a directory with no source tree, serve `/health`).
 - `docker-compose.test.yml` and `make test-db-up` / `make test-db` /
-  `make test-db-down`, so a CI run and a laptop run configure one thing.
+  `make test-db-down`, so hosted CI and the dedicated test server configure
+  the same disposable database. Manual Docker validation runs on the dedicated
+  test server, not an operator laptop.
 
 The **postgres** job also now runs the two login canaries added with B2:
 `tests/db/test_state_store_atomicity.py`, which drives two threads through the

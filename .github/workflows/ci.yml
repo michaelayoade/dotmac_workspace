@@ -1,17 +1,5 @@
 name: CI
 
-# Three kinds of evidence, because this repository had none.
-#
-#   quality      static checks and the tests that need no database
-#   postgres     all three migration lineages composed against a real
-#                PostgreSQL, plus the RLS/tenant-isolation canaries
-#   from-wheel   the app imports and STARTS from a built wheel, installing its
-#                private pins from the verified protected-main bundle
-#
-# The pinned Governance profile job lives in `engineering-standards.yml`,
-# alongside `.dotmac/standards-profile.json`, as every other Dotmac repository
-# carries it.
-
 on:
   push:
     branches: [main]
@@ -19,15 +7,14 @@ on:
     types: [opened, synchronize, reopened]
   workflow_dispatch:
 
+# Candidate jobs only restore caches. A PR can edit its own workflow, so
+# verification against the checked-in lock remains the byte-integrity gate.
 permissions:
   contents: read
-  actions: read
 
 env:
-  # Every environment-specific value is a knob with a documented default
-  # (AGENTS.md §7). Nothing below hardcodes a port, host or image.
-  PYTHON_VERSION: "3.12"
-  POETRY_VERSION: "2.2.0"
+  PYTHON_VERSION: '3.12'
+  POETRY_VERSION: '2.2.0'
 
 jobs:
   quality:
@@ -38,58 +25,64 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
+          fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Verify the locked private wheels
-        id: bundle
-        uses: ./.github/actions/verified-workspace-dependencies
-
-      - name: Install poetry
-        run: pipx install "poetry==${{ env.POETRY_VERSION }}"
-
-      - name: Install verified private wheels offline
+      - name: Require reviewed PR dependency snapshot
+        if: github.event_name == 'pull_request'
         env:
-          BUNDLE_EXPECTED_FILE: ${{ steps.bundle.outputs.expected-file }}
-          BUNDLE_INDEX_ROOT: ${{ steps.bundle.outputs.index-root }}
-        run: >-
-          poetry run python scripts/workspace_bundle_install.py
-          --expected-file "$BUNDLE_EXPECTED_FILE"
-          --index-root "$BUNDLE_INDEX_ROOT"
-
-      # `--sync` still checks the complete lock, while the exact private wheels
-      # are already installed from verified bytes. There is no registry secret
-      # in this candidate-controlled job; a private-index fetch fails closed.
-      - name: Install
-        run: poetry install --no-interaction --sync
-
-      - name: Lint
-        run: poetry run ruff check .
-
-      - name: Format check
-        run: poetry run ruff format --check .
-
-      - name: Type check
-        run: poetry run mypy src/dotmac_workspace
-
-      - name: Tests (no database)
-        run: make test
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if ! git cat-file -e "${PR_HEAD_SHA}^{commit}"; then
+            echo 'PR head commit unavailable for dependency comparison' >&2
+            exit 2
+          fi
+          if ! cmp -s pyproject.toml <(git show "${PR_HEAD_SHA}:pyproject.toml") ||
+             ! cmp -s poetry.lock <(git show "${PR_HEAD_SHA}:poetry.lock"); then
+            echo 'Merge dependencies differ from reviewed PR head; update the branch and rewarm' >&2
+            exit 2
+          fi
+      - name: Restore exact wheelhouse
+        id: wheelhouse-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/workspace-wheelhouse
+          key: workspace-wheelhouse-${{ runner.os }}-${{ runner.arch }}-py312-${{ hashFiles('pyproject.toml', 'poetry.lock') }}
+          fail-on-cache-miss: true
+      - name: Reject partial cache matches
+        env:
+          CACHE_HIT: ${{ steps.wheelhouse-cache.outputs.cache-hit }}
+        run: test "$CACHE_HIT" = true
+      - name: Verify and install locked dependencies offline
+        run: |
+          python -m venv .ci-venv
+          python scripts/workspace_wheelhouse.py install \
+            --directory "$RUNNER_TEMP/workspace-wheelhouse" \
+            --python .ci-venv/bin/python
+          echo "$GITHUB_WORKSPACE/.ci-venv/bin" >> "$GITHUB_PATH"
+      - name: Build and install Workspace wheel offline
+        run: |
+          pipx install "poetry==${POETRY_VERSION}"
+          poetry check --lock
+          poetry build --format wheel
+          .ci-venv/bin/python -m pip install --no-index --no-deps dist/dotmac_workspace-*.whl
+          .ci-venv/bin/python -m pip check
+      - name: Lint, types, format, and DB-free tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
+        run: |
+          make PYTHON= check
+          make PYTHON= test
 
   postgres:
     name: Composed migrations and tenant isolation
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Everything the compose file and the Make targets read, in one place, so a
-    # CI run and a laptop run configure the same thing.
-    #
-    # NOTE: a `services:` block cannot read this `env:` context, which is why
-    # `docker-compose.test.yml` — not a service container — is the source of the
-    # disposable PostgreSQL.
     env:
       TEST_DB_HOST: localhost
-      TEST_DB_PORT: "5434"
+      TEST_DB_PORT: '5434'
       TEST_DB_NAME: workspace_test
       TEST_DB_ADMIN_USER: postgres
       TEST_DB_ADMIN_PASSWORD: postgres
@@ -99,75 +92,104 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
+          fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Verify the locked private wheels
-        id: bundle
-        uses: ./.github/actions/verified-workspace-dependencies
-
-      - name: Install poetry
-        run: pipx install "poetry==${{ env.POETRY_VERSION }}"
-
-      - name: Install verified private wheels offline
+      - name: Require reviewed PR dependency snapshot
+        if: github.event_name == 'pull_request'
         env:
-          BUNDLE_EXPECTED_FILE: ${{ steps.bundle.outputs.expected-file }}
-          BUNDLE_INDEX_ROOT: ${{ steps.bundle.outputs.index-root }}
-        run: >-
-          poetry run python scripts/workspace_bundle_install.py
-          --expected-file "$BUNDLE_EXPECTED_FILE"
-          --index-root "$BUNDLE_INDEX_ROOT"
-
-      - name: Install
-        run: poetry install --no-interaction --sync
-
-      # Brings up the disposable PostgreSQL and runs `make migrate`, which
-      # composes the KERNEL lineage, the APPLICATION DIRECTORY lineage and this
-      # repository's own into one graph and upgrades to `heads`. Nothing here
-      # had ever run a migration before; this step is that evidence, and the
-      # logical prerequisite binding is proven against the live catalog inside
-      # it rather than asserted in a unit test.
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if ! git cat-file -e "${PR_HEAD_SHA}^{commit}"; then
+            echo 'PR head commit unavailable for dependency comparison' >&2
+            exit 2
+          fi
+          if ! cmp -s pyproject.toml <(git show "${PR_HEAD_SHA}:pyproject.toml") ||
+             ! cmp -s poetry.lock <(git show "${PR_HEAD_SHA}:poetry.lock"); then
+            echo 'Merge dependencies differ from reviewed PR head; update the branch and rewarm' >&2
+            exit 2
+          fi
+      - name: Restore exact wheelhouse
+        id: wheelhouse-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/workspace-wheelhouse
+          key: workspace-wheelhouse-${{ runner.os }}-${{ runner.arch }}-py312-${{ hashFiles('pyproject.toml', 'poetry.lock') }}
+          fail-on-cache-miss: true
+      - name: Reject partial cache matches
+        env:
+          CACHE_HIT: ${{ steps.wheelhouse-cache.outputs.cache-hit }}
+        run: test "$CACHE_HIT" = true
+      - name: Verify and install locked dependencies offline
+        run: |
+          python -m venv .ci-venv
+          python scripts/workspace_wheelhouse.py install \
+            --directory "$RUNNER_TEMP/workspace-wheelhouse" \
+            --python .ci-venv/bin/python
+          echo "$GITHUB_WORKSPACE/.ci-venv/bin" >> "$GITHUB_PATH"
+      - name: Build and install Workspace wheel offline
+        run: |
+          pipx install "poetry==${POETRY_VERSION}"
+          poetry check --lock
+          poetry build --format wheel
+          .ci-venv/bin/python -m pip install --no-index --no-deps dist/dotmac_workspace-*.whl
+          .ci-venv/bin/python -m pip check
       - name: Compose all three lineages against PostgreSQL
-        run: make test-db-up
-
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
+        run: make PYTHON= test-db-up
       - name: Migration-composition and tenant-isolation canaries
-        run: make test-db
-
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
+        run: make PYTHON= test-db
       - name: Tear down
         if: always()
-        run: make test-db-down
+        run: make PYTHON= test-db-down
 
   from-wheel:
     name: Boot from a built wheel
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Deliberately does NOT run `poetry install`: that puts `src/` on the path
-    # and would defeat the whole job. The wheel is built, installed into a clean
-    # virtualenv, and booted from a directory containing no source tree.
-    #
-    # The pinned wheels were acquired by the protected main producer from the
-    # registry and verified against this revision's lock. A missing release
-    # therefore fails before the install, without a candidate-held credential.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
+          fetch-depth: 0
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Verify the locked private wheels
-        id: bundle
-        uses: ./.github/actions/verified-workspace-dependencies
-
-      - name: Install poetry (as the wheel BUILD tool only)
-        run: pipx install "poetry==${{ env.POETRY_VERSION }}"
-
-      - name: Build, install and boot from the wheel
+      - name: Require reviewed PR dependency snapshot
+        if: github.event_name == 'pull_request'
         env:
-          BUNDLE_EXPECTED_FILE: ${{ steps.bundle.outputs.expected-file }}
-          BUNDLE_INDEX_ROOT: ${{ steps.bundle.outputs.index-root }}
-        run: make from-wheel-boot
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if ! git cat-file -e "${PR_HEAD_SHA}^{commit}"; then
+            echo 'PR head commit unavailable for dependency comparison' >&2
+            exit 2
+          fi
+          if ! cmp -s pyproject.toml <(git show "${PR_HEAD_SHA}:pyproject.toml") ||
+             ! cmp -s poetry.lock <(git show "${PR_HEAD_SHA}:poetry.lock"); then
+            echo 'Merge dependencies differ from reviewed PR head; update the branch and rewarm' >&2
+            exit 2
+          fi
+      - name: Restore exact wheelhouse
+        id: wheelhouse-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: ${{ runner.temp }}/workspace-wheelhouse
+          key: workspace-wheelhouse-${{ runner.os }}-${{ runner.arch }}-py312-${{ hashFiles('pyproject.toml', 'poetry.lock') }}
+          fail-on-cache-miss: true
+      - name: Reject partial cache matches
+        env:
+          CACHE_HIT: ${{ steps.wheelhouse-cache.outputs.cache-hit }}
+        run: test "$CACHE_HIT" = true
+      - name: Build, install, and boot from the wheel
+        env:
+          WHEELHOUSE_ROOT: ${{ runner.temp }}/workspace-wheelhouse
+        run: |
+          pipx install "poetry==${POETRY_VERSION}"
+          poetry check --lock
+          make from-wheel-boot

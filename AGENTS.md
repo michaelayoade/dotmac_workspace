@@ -199,15 +199,22 @@ versions, build wheels and `pip install` them into the venv without touching
 `pyproject.toml`; see the README.
 
 An unpublished pin is a **finding to report**, never a reason to relax the pin.
-The protected `dependency-bundle-producer.yml` is the only CI job that reads the
-Forgejo index. It fetches the exact wheels in `poetry.lock` on `main`, under the
-main-only `dependency-bundle` environment, and publishes an immutable archive
-plus a bound manifest. Candidate CI never receives a registry secret: it derives
-the expected wheel set from its manifest and lock, verifies reviewed artifact
-coordinates through the SHA-pinned Starter action, and installs private wheels
-from the verified offline index. A missing or unpublished pin fails at producer
-acquisition or candidate verification; neither is worked around with a path
-dependency. The `from-wheel` job still installs the built Workspace wheel into
+Only the protected-main `dependency-bundle-producer.yml` and the manually
+dispatched `wheelhouse-warm.yml` read the Forgejo index. Both use the main-only
+`dependency-bundle` environment. The former warms main's lock; the latter
+accepts an administrator-reviewed PR number and exact head SHA, reads only its
+manifest and lock as data, and never checks out or executes candidate code.
+Candidate CI only restores the cache and has no registry secret. Because a PR
+can change its own workflow, the lock-hash check is the byte-integrity
+boundary. On a PR, the merge result's manifest and lock must match the reviewed
+head byte-for-byte; otherwise update the branch, review and warm its new head.
+Candidate CI requires an exact cache hit, checks every cached wheel
+against `poetry.lock` (including rejecting extra files and links), and
+installs without an index or network fallback. A cache
+miss or an unpublished pin fails closed; neither is worked around with a path
+dependency or a credential in a candidate job. The cache is a delivery
+mechanism, not an authority for bytes: the checked-in lock hashes remain the
+authority. The `from-wheel` job still installs the built Workspace wheel into
 a clean virtualenv and boots without the checkout on its import path.
 The producer's `FORGEJO_BUNDLE_READ_TOKEN` must exist only as an environment
 secret. It intentionally has a different name from historical repository

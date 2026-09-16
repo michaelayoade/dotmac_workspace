@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # From-wheel boot: the Workspace imports and STARTS from built wheels and a
-# verified, secret-free dependency bundle — not from this checkout.
+# verified, secret-free wheelhouse — not from this checkout.
 #
 # B3/B4 asked for exactly this evidence, and the reason is narrow. `poetry
 # install` puts `src/` on the path, so every other job in this repository proves
@@ -36,8 +36,7 @@ BOOT_INTERVAL="${BOOT_INTERVAL:-1}"
 # Deliberately unreachable. `/health` is DB-free by design, so a boot that needs
 # a database is a boot that has grown a startup dependency nobody intended.
 BOOT_DATABASE_URL="${BOOT_DATABASE_URL:-postgresql+psycopg://unused:unused@127.0.0.1:1/unused}"
-: "${BUNDLE_EXPECTED_FILE:?BUNDLE_EXPECTED_FILE is required}"
-: "${BUNDLE_INDEX_ROOT:?BUNDLE_INDEX_ROOT is required}"
+: "${WHEELHOUSE_ROOT:?WHEELHOUSE_ROOT is required}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -50,14 +49,14 @@ poetry build --format wheel
 echo "==> Creating a clean virtualenv (no repo venv, no src/ on the path)"
 "$PYTHON_BIN" -m venv "$BOOT_VENV"
 
-echo "==> Installing verified dependencies from the local bundle"
-"$PYTHON_BIN" scripts/workspace_bundle_install.py \
-  --expected-file "$BUNDLE_EXPECTED_FILE" \
-  --index-root "$BUNDLE_INDEX_ROOT" \
+echo "==> Installing verified dependencies from the local wheelhouse"
+"$PYTHON_BIN" scripts/workspace_wheelhouse.py install \
+  --directory "$WHEELHOUSE_ROOT" \
   --python "$BOOT_VENV/bin/python"
 
 echo "==> Installing the Workspace wheel"
-"$BOOT_VENV/bin/python" -m pip install --quiet "$BUILD_DIR"/dotmac_workspace-*.whl
+"$BOOT_VENV/bin/python" -m pip install --quiet --no-index --no-deps "$BUILD_DIR"/dotmac_workspace-*.whl
+"$BOOT_VENV/bin/python" -m pip check
 
 echo "==> Proving the checkout is not what is being imported"
 # Run from a directory that contains no `src/`, so a `dotmac_workspace` that

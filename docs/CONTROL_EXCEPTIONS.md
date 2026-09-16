@@ -142,3 +142,18 @@ under the restored policy.
 **Status.** `OPEN` on 2026-09-16; no CE-003 protection change has yet occurred.
 **Owner.** Michael (repository owner).
 **Opened.** 2026-09-16, explicit PR #20 recovery authorisation.
+
+**2026-09-16 remediation amendment (append-only).** PR #20's producer head
+`c9f8845c78bcd69a813f7bc2c122360dacfe968e` was squashed onto `main` as `363d4cc5922524c61279f6bc6569578b2fde410c`
+by actor `michaelayoade` during `2026-09-16 12:55:28-12:55:41 UTC`. The
+original strict four app-15368 checks were restored and read back after the
+merge. During the exception, the temporary strict Governance and Reviewed
+warmer guard app-15368 checks were the required checks. The exact hosted job
+URLs were Governance:
+<https://github.com/michaelayoade/dotmac_workspace/actions/runs/35096956721/job/104796578381>
+and guard:
+<https://github.com/michaelayoade/dotmac_workspace/actions/runs/35096956791/job/104796578962>.
+They are also recorded in the PR comment:
+<https://github.com/michaelayoade/dotmac_workspace/pull/20#issuecomment-5697787982>.
+The restoration was independently read back, with no auto-merge. Status:
+`REMEDIATED`.
