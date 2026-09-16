@@ -70,6 +70,8 @@ jobs:
           .ci-venv/bin/python -m pip install --no-index --no-deps dist/dotmac_workspace-*.whl
           .ci-venv/bin/python -m pip check
       - name: Lint, types, format, and DB-free tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
         run: |
           make PYTHON= check
           make PYTHON= test
@@ -135,8 +137,12 @@ jobs:
           .ci-venv/bin/python -m pip install --no-index --no-deps dist/dotmac_workspace-*.whl
           .ci-venv/bin/python -m pip check
       - name: Compose all three lineages against PostgreSQL
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
         run: make PYTHON= test-db-up
       - name: Migration-composition and tenant-isolation canaries
+        env:
+          PYTHONPATH: ${{ github.workspace }}/src:${{ github.workspace }}
         run: make PYTHON= test-db
       - name: Tear down
         if: always()

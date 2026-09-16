@@ -138,6 +138,7 @@ def test_merge_dependency_drift_refuses_before_cache_restore(tmp_path: Path) -> 
 
 def test_candidate_ci_is_secret_free_read_only_and_offline() -> None:
     workflow = yaml.safe_load(CI.read_text())
+    ci = workflow
     assert set(workflow) == {"name", True, "permissions", "env", "jobs"}
     assert workflow["permissions"] == {"contents": "read"}
     assert set(workflow["jobs"]) == {"quality", "postgres", "from-wheel"}
@@ -190,6 +191,7 @@ def test_candidate_ci_is_secret_free_read_only_and_offline() -> None:
         )
         if name == "from-wheel":
             assert any("make from-wheel-boot" in value for value in _strings(steps))
+            assert not any(step.get("env", {}).get("PYTHONPATH") for step in steps)
             assert (
                 "workspace_wheelhouse.py install"
                 in (ROOT / "scripts/from_wheel_boot.sh").read_text()
@@ -208,6 +210,19 @@ def test_candidate_ci_is_secret_free_read_only_and_offline() -> None:
         assert not any("poetry install" in value for value in _strings(steps))
         assert not any("actions/cache/save@" in value for value in _strings(steps))
         assert not any("./.github/actions/" in value for value in _strings(steps))
+
+    assert ci["jobs"]["quality"]["steps"][-1]["env"] == {
+        "PYTHONPATH": "${{ github.workspace }}/src:${{ github.workspace }}"
+    }
+    postgres_steps = ci["jobs"]["postgres"]["steps"]
+    for step_name in (
+        "Compose all three lineages against PostgreSQL",
+        "Migration-composition and tenant-isolation canaries",
+    ):
+        step = next(step for step in postgres_steps if step.get("name") == step_name)
+        assert step["env"] == {
+            "PYTHONPATH": "${{ github.workspace }}/src:${{ github.workspace }}"
+        }
 
 
 def test_only_protected_main_can_warm_and_save_cache() -> None:
