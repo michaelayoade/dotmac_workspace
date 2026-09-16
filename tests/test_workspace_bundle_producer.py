@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import zipfile
 from pathlib import Path
@@ -119,7 +120,9 @@ def test_workflow_has_protected_fetch_and_pinned_actions() -> None:
     assert "FORGEJO_PYPI_USER" not in workflow
     assert 'if [ -z "$FORGEJO_BUNDLE_READ_TOKEN" ]; then' in workflow
     assert "ci-reader:" in workflow
-    assert "upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0" in workflow
+    assert "upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in workflow
+    for action, revision in re.findall(r"uses:\s+([^\s@]+)@([^\s]+)", workflow):
+        assert re.fullmatch(r"[0-9a-f]{40}", revision), action
     assert (
         "verified-dependency-bundle@7ec614c7b8051e7d399d80381ffdb6344d50dbc6"
         in workflow
