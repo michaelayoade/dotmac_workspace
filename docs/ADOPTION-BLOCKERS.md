@@ -200,6 +200,12 @@ touching `pyproject.toml` — see the README. The `from-wheel` CI job installs t
 built wheel into a clean virtualenv and resolves its pins from the index, so an
 unpublished pin fails there, loudly, rather than being quietly substituted.
 
+**2026-09-16 recovery amendment.** The historical job used direct index
+resolution. Candidate CI now verifies the exact published private wheels from a
+protected-main bundle against `poetry.lock`, then installs those wheels into
+the clean virtualenv without a registry secret. An unpublished pin fails at
+protected acquisition or bundle verification; no path dependency is admitted.
+
 One shape change in 0.1.0a2 that this repository already accommodates: its
 lineage root declares `requires=("tenant_scope_catalog.v1",
 "module_database_roles.v1")` instead of naming a foreign revision, so the
@@ -215,7 +221,9 @@ contract: every non-system audit writer supplies `(actor_type, actor_id)` and
 **Cleared 2026-08-16.** The remote exists, `main` is protected and requires a
 pull request with four green jobs, `poetry.lock` is committed, and every job has
 produced real hosted results. Main run `31962357233` is the current recorded
-quality, PostgreSQL, from-wheel, and engineering-standards evidence.
+quality, PostgreSQL, from-wheel, and engineering-standards evidence for that
+historical revision. The 2026-09-16 secret-free CI replacement needs fresh
+hosted results; this prior run cannot prove the replacement.
 
 Added:
 

@@ -1,0 +1,81 @@
+name: Produce verified dependency bundle
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  produce:
+    runs-on: ubuntu-latest
+    environment: dependency-bundle
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Check out exact main revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Bind acquired bytes to the dispatch SHA recorded by the verifier.
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify the checked-out dispatch revision
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Generate expected dependency file
+        run: python scripts/workspace_dependency_plan.py > expected-dependencies.json
+
+      - name: Download and verify wheels
+        env:
+          # Unique to this environment: never fall back to a repository secret.
+          FORGEJO_BUNDLE_READ_TOKEN: ${{ secrets.FORGEJO_BUNDLE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$FORGEJO_BUNDLE_READ_TOKEN" ]; then
+            echo 'bundle credential unavailable' >&2
+            exit 2
+          fi
+          export PIP_INDEX_URL="https://ci-reader:${FORGEJO_BUNDLE_READ_TOKEN}@registry.dotmac.io/api/packages/dotmac/pypi/simple"
+          python scripts/workspace_bundle_producer.py \
+            --plan expected-dependencies.json \
+            --download-dir wheels \
+            --output bundle.zip
+
+      - name: Upload verified archive
+        id: bundle-upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0 # v7.0.1
+        with:
+          name: workspace-dependency-bundle
+          path: bundle.zip
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Construct bound manifest
+        id: manifest
+        uses: michaelayoade/dotmac_starter_mt/.github/actions/verified-dependency-bundle@7ec614c7b8051e7d399d80381ffdb6344d50dbc6
+        with:
+          operation: construct
+          archive-artifact-id: ${{ steps.bundle-upload.outputs.artifact-id }}
+          acquired-dir: wheels
+          archive-path: bundle.zip
+          environment-name: dependency-bundle
+          producer-repository: ${{ github.repository }}
+          producer-repository-id: ${{ github.repository_id }}
+          producer-workflow-path: .github/workflows/dependency-bundle-producer.yml
+          archive-artifact-name: workspace-dependency-bundle
+          sidecar-artifact-name: workspace-dependency-bundle-manifest
+          expected-file: expected-dependencies.json
+
+      - name: Upload bound manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0 # v7.0.1
+        with:
+          name: workspace-dependency-bundle-manifest
+          path: ${{ steps.manifest.outputs.manifest-path }}
+          if-no-files-found: error
+          retention-days: 90

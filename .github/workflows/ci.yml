@@ -5,8 +5,8 @@ name: CI
 #   quality      static checks and the tests that need no database
 #   postgres     all three migration lineages composed against a real
 #                PostgreSQL, plus the RLS/tenant-isolation canaries
-#   from-wheel   the app imports and STARTS from a built wheel, resolving its
-#                pins from the private index rather than from this checkout
+#   from-wheel   the app imports and STARTS from a built wheel, installing its
+#                private pins from the verified protected-main bundle
 #
 # The pinned Governance profile job lives in `engineering-standards.yml`,
 # alongside `.dotmac/standards-profile.json`, as every other Dotmac repository
@@ -21,6 +21,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 env:
   # Every environment-specific value is a knob with a documented default
@@ -35,26 +36,32 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Verify the locked private wheels
+        id: bundle
+        uses: ./.github/actions/verified-workspace-dependencies
+
       - name: Install poetry
         run: pipx install "poetry==${{ env.POETRY_VERSION }}"
 
-      # The two Dotmac packages resolve from the private Forgejo index
-      # (ADR-0005). The credential is a repository secret; it is never a value
-      # in this file, in the lock file, or in a log line.
-      - name: Configure the private index
+      - name: Install verified private wheels offline
         env:
-          FORGEJO_PYPI_USER: ${{ secrets.FORGEJO_PYPI_USER }}
-          FORGEJO_PYPI_TOKEN: ${{ secrets.FORGEJO_PYPI_TOKEN }}
-        run: poetry config http-basic.forgejo "$FORGEJO_PYPI_USER" "$FORGEJO_PYPI_TOKEN"
+          BUNDLE_EXPECTED_FILE: ${{ steps.bundle.outputs.expected-file }}
+          BUNDLE_INDEX_ROOT: ${{ steps.bundle.outputs.index-root }}
+        run: >-
+          poetry run python scripts/workspace_bundle_install.py
+          --expected-file "$BUNDLE_EXPECTED_FILE"
+          --index-root "$BUNDLE_INDEX_ROOT"
 
-      # `--sync` so the resolved environment is exactly the lock file and not
-      # whatever a previous run left behind. A lock file stale against
-      # `pyproject.toml` fails here, which is most of the point of committing one.
+      # `--sync` still checks the complete lock, while the exact private wheels
+      # are already installed from verified bytes. There is no registry secret
+      # in this candidate-controlled job; a private-index fetch fails closed.
       - name: Install
         run: poetry install --no-interaction --sync
 
@@ -90,19 +97,28 @@ jobs:
       TEST_DB_PASSWORD: app_user
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Verify the locked private wheels
+        id: bundle
+        uses: ./.github/actions/verified-workspace-dependencies
+
       - name: Install poetry
         run: pipx install "poetry==${{ env.POETRY_VERSION }}"
 
-      - name: Configure the private index
+      - name: Install verified private wheels offline
         env:
-          FORGEJO_PYPI_USER: ${{ secrets.FORGEJO_PYPI_USER }}
-          FORGEJO_PYPI_TOKEN: ${{ secrets.FORGEJO_PYPI_TOKEN }}
-        run: poetry config http-basic.forgejo "$FORGEJO_PYPI_USER" "$FORGEJO_PYPI_TOKEN"
+          BUNDLE_EXPECTED_FILE: ${{ steps.bundle.outputs.expected-file }}
+          BUNDLE_INDEX_ROOT: ${{ steps.bundle.outputs.index-root }}
+        run: >-
+          poetry run python scripts/workspace_bundle_install.py
+          --expected-file "$BUNDLE_EXPECTED_FILE"
+          --index-root "$BUNDLE_INDEX_ROOT"
 
       - name: Install
         run: poetry install --no-interaction --sync
@@ -131,24 +147,27 @@ jobs:
     # and would defeat the whole job. The wheel is built, installed into a clean
     # virtualenv, and booted from a directory containing no source tree.
     #
-    # It is also the cheapest proof that the pins are real. An unpublished
-    # `dotmac-kernel` or `dotmac-application-directory` fails at the install
-    # step, loudly, rather than being worked around with a path dependency
-    # (AGENTS.md §6, and blocker B3).
+    # The pinned wheels were acquired by the protected main producer from the
+    # registry and verified against this revision's lock. A missing release
+    # therefore fails before the install, without a candidate-held credential.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Verify the locked private wheels
+        id: bundle
+        uses: ./.github/actions/verified-workspace-dependencies
 
       - name: Install poetry (as the wheel BUILD tool only)
         run: pipx install "poetry==${{ env.POETRY_VERSION }}"
 
       - name: Build, install and boot from the wheel
         env:
-          # pip's own channel for the private index. Assembled from secrets into
-          # an env var so the credential never reaches a command line, a step
-          # name or a log; the script runs without `set -x` for the same reason.
-          PIP_EXTRA_INDEX_URL: https://${{ secrets.FORGEJO_PYPI_USER }}:${{ secrets.FORGEJO_PYPI_TOKEN }}@registry.dotmac.io/api/packages/dotmac/pypi/simple
+          BUNDLE_EXPECTED_FILE: ${{ steps.bundle.outputs.expected-file }}
+          BUNDLE_INDEX_ROOT: ${{ steps.bundle.outputs.index-root }}
         run: make from-wheel-boot

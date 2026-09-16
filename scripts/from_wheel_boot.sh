@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# From-wheel boot: the Workspace imports and STARTS from built wheels, resolved
-# from the private index — not from this checkout, and not from a sibling one.
+# From-wheel boot: the Workspace imports and STARTS from built wheels and a
+# verified, secret-free dependency bundle — not from this checkout.
 #
 # B3/B4 asked for exactly this evidence, and the reason is narrow. `poetry
 # install` puts `src/` on the path, so every other job in this repository proves
@@ -21,10 +21,6 @@
 #     be enforced by a guard nothing declares;
 #   * the process serves `/health` with no database reachable at all.
 #
-# Everything is a knob with a documented default. Credentials for the private
-# index arrive through `PIP_EXTRA_INDEX_URL` (or `pip`'s own config) and are
-# never echoed — no `set -x` here, on purpose.
-
 set -euo pipefail
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -40,6 +36,8 @@ BOOT_INTERVAL="${BOOT_INTERVAL:-1}"
 # Deliberately unreachable. `/health` is DB-free by design, so a boot that needs
 # a database is a boot that has grown a startup dependency nobody intended.
 BOOT_DATABASE_URL="${BOOT_DATABASE_URL:-postgresql+psycopg://unused:unused@127.0.0.1:1/unused}"
+: "${BUNDLE_EXPECTED_FILE:?BUNDLE_EXPECTED_FILE is required}"
+: "${BUNDLE_INDEX_ROOT:?BUNDLE_INDEX_ROOT is required}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -51,13 +49,14 @@ poetry build --format wheel
 
 echo "==> Creating a clean virtualenv (no repo venv, no src/ on the path)"
 "$PYTHON_BIN" -m venv "$BOOT_VENV"
-"$BOOT_VENV/bin/python" -m pip install --quiet --upgrade pip
 
-echo "==> Installing the wheel and resolving its pins from the index"
-# The wheel's own metadata carries the exact pins. If either is unpublished this
-# is where the run fails — which is the point: an unpublished pin must be a
-# loud, reported failure and never something worked around with a path
-# dependency (AGENTS.md §6).
+echo "==> Installing verified dependencies from the local bundle"
+"$PYTHON_BIN" scripts/workspace_bundle_install.py \
+  --expected-file "$BUNDLE_EXPECTED_FILE" \
+  --index-root "$BUNDLE_INDEX_ROOT" \
+  --python "$BOOT_VENV/bin/python"
+
+echo "==> Installing the Workspace wheel"
 "$BOOT_VENV/bin/python" -m pip install --quiet "$BUILD_DIR"/dotmac_workspace-*.whl
 
 echo "==> Proving the checkout is not what is being imported"
