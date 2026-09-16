@@ -98,3 +98,47 @@ the exact PR, SHA and UTC window when this entry is marked `REMEDIATED`.
 **Status.** `OPEN` on 2026-09-16; no branch-protection change has yet occurred.
 **Owner.** Michael (repository owner).
 **Opened.** 2026-09-16, explicit one-merge recovery authorisation.
+
+---
+
+## CE-003 — PR #20 wheelhouse-producer bootstrap · `OPEN`
+
+**Control.** `main` requires four GitHub Actions checks, all from app ID 15368,
+with `strict=true`: `Dotmac engineering standards`, `Static checks and
+DB-free tests`, `Composed migrations and tenant isolation`, and `Boot from a
+built wheel`. A required check must pass on the current PR head before merge.
+
+**What bypasses it.** Michael authorised a second, separate one-merge recovery
+for Workspace PR #20 only. The administrator may temporarily require only
+`Dotmac engineering standards` and `Reviewed warmer guard tests`, both from
+GitHub Actions app ID 15368, with `strict=true`; merge PR #20 only if both are
+green on its exact, current head; then immediately restore and read back the
+original four checks and `strict=true`. This authorisation does not extend
+CE-002, permit another PR, accept the failed legacy jobs as passing, or allow
+a credentialed warmer dispatch or repository-secret fallback.
+
+**Why it was accepted.** The three legacy jobs cannot pass before the bundle
+producer is installed on `main`: they fail while loading the unavailable or
+invalid `ci/dependency-bundle.json` coordinates, before executing the proposed
+warmer. The replacement guard-test job and Governance job are independently
+hosted and can run on the producer PR. Keeping the legacy jobs required would
+prevent the merge that makes a main-owned bundle available.
+
+**Compensating check while open.** Before changing protection, record its exact
+four-check snapshot, verify the PR number, base and head, verify both temporary
+required checks are successful at that head, and keep the three legacy failure
+results visible. Change only the required-check list. Do not merge a draft,
+stale or changed head. Immediately after the merge, restore the exact original
+check/app bindings and strict mode by API, read them back, and record the
+merged SHA, actor and UTC exception window. Do not start the warmer until the
+original protection is restored.
+
+**Remediation condition.** PR #20 is merged under the two named green checks;
+the exact original four checks and strict mode are restored and read back; and
+the actor, merged SHA and UTC window are attached to the PR and to a dated
+amendment of this ledger. A subsequent consumer PR must earn fresh green checks
+under the restored policy.
+
+**Status.** `OPEN` on 2026-09-16; no CE-003 protection change has yet occurred.
+**Owner.** Michael (repository owner).
+**Opened.** 2026-09-16, explicit PR #20 recovery authorisation.

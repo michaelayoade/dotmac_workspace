@@ -1,0 +1,31 @@
+name: Reviewed wheelhouse warmer guards
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  guards:
+    name: Reviewed warmer guard tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install public test tools
+        run: python -m pip install --disable-pip-version-check 'pytest==8.4.2' 'PyYAML==6.0.3' 'ruff==0.6.9'
+      - name: Test producer guards without product dependencies
+        run: python -m pytest --noconftest -q tests/test_warm_reviewed_wheelhouse.py tests/test_wheelhouse_warm_workflow.py
+      - name: Check producer lint and format
+        run: |
+          python -m ruff check scripts/warm_reviewed_wheelhouse.py tests/test_warm_reviewed_wheelhouse.py tests/test_wheelhouse_warm_workflow.py
+          python -m ruff format --check scripts/warm_reviewed_wheelhouse.py tests/test_warm_reviewed_wheelhouse.py tests/test_wheelhouse_warm_workflow.py

@@ -1,0 +1,123 @@
+# Warm a reviewed pull request's wheelhouse WITHOUT ever running its code.
+#
+# The credential this job holds can read the private registry. A job that holds
+# it and checks out a contributor's branch hands that credential to whatever
+# that branch's build backend, `setup.py` or install hook decides to do, and the
+# review that approved the diff never covered the code that ran. So this job
+# checks out only main, reads exactly two files from the pull request as data,
+# and downloads binary wheels it can hash-check against the lock.
+name: Warm reviewed wheelhouse
+
+on:
+  # Dispatch only. There is deliberately no `pull_request`, no
+  # `pull_request_target` and no `push` trigger: this runs when a human who has
+  # read the diff asks for it, naming the exact commit they read.
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: Number of the reviewed pull request.
+        required: true
+        type: string
+      head-sha:
+        description: Exact 40-character head commit that was reviewed.
+        required: true
+        type: string
+
+permissions:
+  # Enough to read the two files over the API. No `pull-requests: write`, no
+  # `actions:`, no `packages:` — this job publishes nothing.
+  contents: read
+
+concurrency:
+  group: wheelhouse-warm-${{ inputs.pr-number }}
+  cancel-in-progress: true
+
+jobs:
+  warm:
+    # Branch policy half: the environment is configured to admit main only, and
+    # it is what scopes FORGEJO_BUNDLE_READ_TOKEN to this job.
+    environment: dependency-bundle
+    # Ref half. `workflow_dispatch` takes a ref, so the environment's policy is
+    # a setting outside this file that this file must not simply assume. Both.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Runtime bound. The script bounds each download independently.
+    timeout-minutes: 20
+    outputs:
+      cache-key: ${{ steps.bind.outputs.cache-key }}
+    steps:
+      - name: Refuse a dispatch that is not main's code
+        # Independent of the job-level `if:` above and of the environment, and
+        # first, before any credential is in scope for any step.
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "refusing to warm from ${REF}: not protected main" >&2
+            exit 2
+          fi
+
+      - name: Check out main, and only main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The dispatch revision on main. The pull request's tree is never
+          # fetched, never checked out, and never on disk as a working tree.
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify the checked-out revision is the dispatched one
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Bind the reviewed snapshot
+        id: bind
+        env:
+          # The API token only. The registry credential is deliberately absent
+          # from this step: reading and spending are separate privileges.
+          GITHUB_TOKEN: ${{ github.token }}
+          # Both inputs arrive through the environment, NEVER interpolated into
+          # the shell. `${{ inputs.* }}` is substituted before bash parses the
+          # line, so a value containing a quote would run as a command — and it
+          # would run before the script had any chance to reject it.
+          PR_NUMBER: ${{ inputs.pr-number }}
+          HEAD_SHA: ${{ inputs.head-sha }}
+        run: |
+          set -euo pipefail
+          python scripts/warm_reviewed_wheelhouse.py bind \
+            --repository "$GITHUB_REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
+            --head-sha "$HEAD_SHA" \
+            --python-version 3.12 \
+            --snapshot "$RUNNER_TEMP/snapshot"
+
+      - name: Acquire the locked wheels
+        env:
+          # Environment-scoped, and unique to this environment: never fall back
+          # to a repository secret. An empty value means the environment did not
+          # supply it, which fails the job rather than proceeding anonymously.
+          FORGEJO_BUNDLE_READ_TOKEN: ${{ secrets.FORGEJO_BUNDLE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$FORGEJO_BUNDLE_READ_TOKEN" ]; then
+            echo 'registry-read credential unavailable' >&2
+            exit 2
+          fi
+          # Masked so that any accidental echo of the value is redacted by the
+          # runner before it reaches the log.
+          echo "::add-mask::$FORGEJO_BUNDLE_READ_TOKEN"
+          python scripts/warm_reviewed_wheelhouse.py acquire \
+            --snapshot "$RUNNER_TEMP/snapshot" \
+            --directory "$RUNNER_TEMP/workspace-wheelhouse"
+
+      - name: Save the wheelhouse under the exact dependency key
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          # Only verified wheels. The snapshot directory, the pip cache and
+          # every log stay out of what is saved.
+          path: ${{ runner.temp }}/workspace-wheelhouse
+          key: ${{ steps.bind.outputs.cache-key }}
