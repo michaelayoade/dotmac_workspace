@@ -139,10 +139,15 @@ def test_no_dispatch_input_is_interpolated_into_a_shell_line() -> None:
 
 
 def test_the_job_is_least_privileged_and_time_bounded() -> None:
-    """BREAK CONDITION: widen `permissions:` or drop `timeout-minutes`."""
+    """BREAK CONDITION: widen permissions, change runner, or drop timeout.
+
+    The downloader intentionally passes no proxy variables to pip. A move to a
+    self-hosted runner behind a proxy needs a separate network policy review.
+    """
     workflow, job = _workflow(), _job()
     assert workflow["permissions"] == {"contents": "read"}
     assert "permissions" not in job or job["permissions"] == {"contents": "read"}
+    assert job["runs-on"] == "ubuntu-latest"
     assert isinstance(job["timeout-minutes"], int) and job["timeout-minutes"] <= 30
 
 
