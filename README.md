@@ -347,14 +347,35 @@ revision, not evidence for the secret-free replacement below.
 
 **CI security recovery (2026-09-16).** The former repository-secret CI workflow
 was disabled while it was still capable of passing a Forgejo credential to
-candidate-controlled code. The replacement checks derive the four private
-wheels from `pyproject.toml` and `poetry.lock`, then use the SHA-pinned Starter
-bundle verifier and reviewed `ci/dependency-bundle.json` coordinates. Only the
-main-only `dependency-bundle` producer may fetch from Forgejo. Until that
-producer has published a verified archive and the coordinates are committed,
-the replacement CI fails closed; the historical B4 result is not evidence for
-this replacement. See `docs/CONTROL_EXCEPTIONS.md` CE-002 for the one-merge
-branch-protection recovery and restoration gate.
+candidate-controlled code. The replacement uses a main-only
+`dependency-bundle` job to warm a cache of locked wheels. For a reviewed PR
+whose lock differs from main, an administrator dispatches `wheelhouse-warm.yml`
+on `main` with the PR number and exact reviewed head SHA. That job reads only
+the manifest and lock as data, never runs candidate code, and saves the same
+content-addressed cache key. The committed PR jobs have no registry secret and
+only restore caches. They require an
+exact manifest-and-lock cache key, verify every cached wheel against
+`poetry.lock`, reject missing or extra wheels, and install the project
+dependencies offline. A changed lock must first be warmed by the protected
+reviewed-PR workflow; a cache miss is CI friction, not permission
+to fetch from Forgejo in a PR. The cache is untrusted storage, not a source of
+hashes or credentials. The historical B4 result is not evidence for this
+replacement. See `docs/CONTROL_EXCEPTIONS.md` CE-002 and CE-003 for the
+distinct branch-protection recovery records.
+
+**Bootstrap gate.** PR #20 installed the producer under the separate CE-003
+exception, and the original protection was restored. The wheelhouse cache is
+currently unwarmed pending a reviewed consumer dispatch. Dispatch the
+main-owned workflow for the exact reviewed consumer PR head, let the cache save
+finish, and rerun the consumer checks on that head. The existing one-merge
+protection exceptions authorize no further reduced-check merge. If the warm or
+consumer checks cannot satisfy policy, stop for a separately authorized,
+recorded recovery path. The same reviewed-head warm is required for future lock
+changes; PR CI must never receive a registry secret.
+PR CI checks that the merge result's manifest and lock are byte-identical to
+the reviewed head before restoring a cache. If main changed either file after
+the branch point, update the PR branch, review the new head, and warm that head
+again; a cache for the old head is not evidence for the merged dependency set.
 
 ## Commands
 
