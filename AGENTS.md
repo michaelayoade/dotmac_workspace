@@ -199,9 +199,16 @@ versions, build wheels and `pip install` them into the venv without touching
 `pyproject.toml`; see the README.
 
 An unpublished pin is a **finding to report**, never a reason to relax the pin.
-The `from-wheel` CI job exists partly to make that failure loud: it installs the
-built wheel into a clean virtualenv and resolves its pins from the index, so a
-version that is only written down fails there rather than in production.
+The protected `dependency-bundle-producer.yml` is the only CI job that reads the
+Forgejo index. It fetches the exact wheels in `poetry.lock` on `main`, under the
+main-only `dependency-bundle` environment, and publishes an immutable archive
+plus a bound manifest. Candidate CI never receives a registry secret: it derives
+the expected wheel set from its manifest and lock, verifies reviewed artifact
+coordinates through the SHA-pinned Starter action, and installs private wheels
+from the verified offline index. A missing or unpublished pin fails at producer
+acquisition or candidate verification; neither is worked around with a path
+dependency. The `from-wheel` job still installs the built Workspace wheel into
+a clean virtualenv and boots without the checkout on its import path.
 
 ## 6a. Compose the ecosystem packages; never hand-roll what one owns
 
@@ -264,6 +271,16 @@ image name or path.
   around that by writing grant handling into this assembly.
 
 ## Validation before any commit
+
+All Docker and disposable-PostgreSQL validation runs on the dedicated Dotmac
+testing server, from a fresh checkout of the exact revision under test. Never
+start or use the workstation's Docker daemon for this repository. Run Compose
+on the server itself rather than pointing a local Docker CLI at a remote daemon:
+Compose bind mounts and project paths must resolve on the same host. Keep test
+ports loopback-bound, use a run-scoped project, and tear down only that project's
+resources. Michael must explicitly name the SSH target for each task; a Fleet
+alias or Knowledge record is not access authorisation. Git-hosted CI remains
+the merge evidence; server tests are supporting pre-review validation.
 
 ```sh
 make check         # ruff lint + format check + mypy

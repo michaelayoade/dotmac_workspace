@@ -55,3 +55,46 @@ proves the declared cascade reaches the kernel's real error renderer.
 **Owner.** Michael (repository owner). Reassign by editing this line; an entry
 whose owner is a role nobody holds is unowned.
 **Opened.** 2026-08-26, adopting kernel 0.1.0a97 (PR #13).
+
+---
+
+## CE-002 — one-merge CI protection recovery · `OPEN`
+
+**Control.** `main` requires the quality, PostgreSQL, from-wheel and Governance
+checks on the exact PR head, and candidate-controlled workflows receive no
+Forgejo registry credential. The required-check list is strict.
+
+**What bypasses it.** On 2026-09-16, the old CI workflow was disabled to stop
+new candidate runs that would receive repository `FORGEJO_PYPI_TOKEN`. This
+also stopped three required checks. Michael authorised a time-boxed exception
+for **one reviewed hardening merge only**: temporarily remove those three
+unavailable check contexts from branch protection while retaining Governance,
+then restore the original four-context strict list immediately after that
+merge. This exception never authorises re-enabling the old credentialed
+workflow, a direct commit to `main`, a duplicate-name PR bootstrap check, or a
+credentialed dispatch from an alternate ref.
+
+**Why it was accepted.** The protected bundle producer and secret-free consumer
+must be checked in before they can run; the disabled old workflow cannot
+provide the three required contexts for the PR that installs them. Re-running
+old candidate CI would reopen the credential exposure, while a PR-authored
+replacement with the same check names could satisfy context-based protection
+without proving the original jobs.
+
+**Compensating check while open.** Record the exact pre-change protection
+snapshot, reviewed PR head, merged SHA, actor and exception window. Keep the
+old workflow disabled, require Governance green, independent security review,
+and local format/lint/unit/database evidence before the single merge. Do not
+change any other protection. Restore the original required contexts and
+`strict=true` by API immediately after merge, then read them back before
+enabling any CI workflow. The producer remains without a registry credential
+until its main-only environment and source controls are verified.
+
+**Remediation condition.** The exact four required check contexts and strict
+mode are restored and read back after the one hardening merge; subsequent PRs
+must produce fresh green checks from the secret-free CI before merge. Record
+the exact PR, SHA and UTC window when this entry is marked `REMEDIATED`.
+
+**Status.** `OPEN` on 2026-09-16; no branch-protection change has yet occurred.
+**Owner.** Michael (repository owner).
+**Opened.** 2026-09-16, explicit one-merge recovery authorisation.

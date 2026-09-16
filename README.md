@@ -342,7 +342,19 @@ the sessions it produced without a Workspace-owned shadow mechanism.
 **B3 is cleared**: both pins are published and `poetry.lock` is committed.
 **B4 is cleared**: the remote exists, `main` is protected, and the quality,
 PostgreSQL, from-wheel, and engineering-standards jobs have all produced green
-results. Main run `31962357233` is the current recorded result.
+results. Main run `31962357233` is the recorded historical result for that
+revision, not evidence for the secret-free replacement below.
+
+**CI security recovery (2026-09-16).** The former repository-secret CI workflow
+was disabled while it was still capable of passing a Forgejo credential to
+candidate-controlled code. The replacement checks derive the four private
+wheels from `pyproject.toml` and `poetry.lock`, then use the SHA-pinned Starter
+bundle verifier and reviewed `ci/dependency-bundle.json` coordinates. Only the
+main-only `dependency-bundle` producer may fetch from Forgejo. Until that
+producer has published a verified archive and the coordinates are committed,
+the replacement CI fails closed; the historical B4 result is not evidence for
+this replacement. See `docs/CONTROL_EXCEPTIONS.md` CE-002 for the one-merge
+branch-protection recovery and restoration gate.
 
 ## Commands
 
