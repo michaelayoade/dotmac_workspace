@@ -13,12 +13,13 @@ BOUNDED DATA, over the API, at one exact commit: `pyproject.toml` and
 hash-checked against the lock, and nothing in them is built or imported. The
 result is bytes in a directory and a cache key derived from those bytes.
 
-The snapshot binding is the property worth stating: both files are read at one
-SHA, that SHA is confirmed to be the pull request's head BEFORE the reads and
-again AFTER them, and each file's bytes are proven to hash to the git blob id
-the API named for it at that SHA. A head that moves mid-run invalidates the
-warm rather than producing a cache entry that claims to describe a commit it
-does not.
+The snapshot binding is the property worth stating, and it is carried by the
+FIXED ref: both files are read at one exact SHA passed as `?ref=`, so nothing
+landing on the branch mid-run can change what either read returns, and each
+file's bytes are proven to hash to the git blob id the API named for it at that
+SHA. The head is separately confirmed to be the pull request's head before the
+reads and again after them — a different claim, freshness of the reviewed head,
+so the warm is not produced for a commit the pull request has moved past.
 """
 
 from __future__ import annotations
@@ -69,6 +70,24 @@ MAX_LOCK_BYTES = 8 * 1024 * 1024
 # Runtime bound, per acquisition, independent of the job-level timeout.
 ACQUIRE_TIMEOUT_SECONDS = 300
 
+# The downloader's environment is CONSTRUCTED from this list, not filtered from
+# the job's. An allowlist, because the job step that runs `acquire` also holds
+# the registry credential as a plain variable (`FORGEJO_BUNDLE_READ_TOKEN`) and
+# the downloader has no use for it — the credential it needs is already inside
+# `PIP_INDEX_URL`. A denylist would have to anticipate every name worth
+# withholding; this only has to name what pip legitimately needs, and anything
+# added to the step's environment later does not reach the child by default.
+CHILD_ENV_KEYS = (
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+)
+
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 HASH_RE = re.compile(r"sha256:([0-9a-f]{64})\Z")
 WHEEL_RE = re.compile(r"([A-Za-z0-9_.]+)-([^-]+)-(?:[^-]+-)?[^-]+-[^-]+-[^-]+\.whl\Z")
@@ -106,6 +125,34 @@ def _host(url: str) -> str:
     if not host:
         raise WarmRefused("index url names no host")
     return host.lower()
+
+
+def _refuse_a_decorated_index(url: str) -> None:
+    """A private index URL is a bare https origin and path — nothing else.
+
+    `acquire` injects the credential by splicing `ci-reader:<token>@` in after
+    the scheme. If the lock's own URL already carries userinfo, the splice
+    produces `https://ci-reader:TOKEN@someone@registry.dotmac.io/simple`: a
+    second `@`, after which what the request actually resolves to is the
+    parser's opinion rather than this module's. A port is refused for the same
+    reason — the allowlist admits a HOST, and that host on another port is a
+    different endpoint than the one that was admitted. Refused here, where the
+    plan is built from lock data, so it is a data-shape refusal and not a
+    surprise in the one step that holds the credential.
+    """
+    parsed = urlsplit(url)
+    if parsed.username:
+        raise WarmRefused("private index url carries a username")
+    if parsed.password:
+        raise WarmRefused("private index url carries a password")
+    try:
+        port = parsed.port
+    except ValueError:
+        # A non-numeric port; `hostname` does not validate it, so `_host` let
+        # it through. Still a port component, still refused.
+        raise WarmRefused("private index url carries an unreadable port") from None
+    if port is not None:
+        raise WarmRefused("private index url carries a port")
 
 
 def git_blob_id(payload: bytes) -> str:
@@ -171,12 +218,21 @@ def _read_blob(fetch: Fetch, repo: str, path: str, sha: str, limit: int) -> byte
 def bind_snapshot(
     fetch: Fetch, repo: str, pr_number: int, head_sha: str
 ) -> tuple[bytes, bytes]:
-    """Read both files at ONE commit, proven to be the PR's head, still.
+    """Read both files at ONE commit, then confirm that commit is still the head.
 
-    Confirmed on both sides of the reads. A head that advances between them
-    means the two files could come from different trees, and a cache entry that
-    mixes a manifest from one commit with a lock from another is exactly the
-    thing a lock file exists to prevent.
+    Two distinct claims, and conflating them loses the load-bearing one. The
+    SNAPSHOT claim rests entirely on the FIXED ref: both `_read_blob` calls pass
+    the same validated 40-character `head_sha` as `?ref=`, so a push landing
+    between the two reads cannot change what either read returns and the
+    manifest and the lock cannot come from different trees. No timing check
+    would recover that property if the fixed ref were replaced by a moving one,
+    because each read would individually be 'current'.
+
+    The re-confirmation after the reads is a separate FRESHNESS claim: that the
+    commit the administrator named is still the pull request's head when the
+    snapshot finishes. It does not make the two reads one snapshot — the fixed
+    ref already did — it stops a warm being produced for a head the pull request
+    has already moved past.
     """
     if _pull_head(fetch, repo, pr_number) != head_sha:
         raise WarmRefused("named sha is not the pull request's head")
@@ -208,7 +264,10 @@ def build_plan(manifest: bytes, lock: bytes) -> dict[str, dict[str, Any]]:
         if isinstance(declaration, dict) and declaration.get("source"):
             name = _normalise(raw_name)
             if not PRIVATE_SCOPE.fullmatch(name):
-                raise WarmRefused(f"{name} is outside the private package scope")
+                # `!r` because `name` has not passed `NAME_RE` yet: it is raw
+                # manifest text, and raw text in a message the job prints can
+                # forge a workflow command in the log.
+                raise WarmRefused(f"{name!r} is outside the private package scope")
             private.add(name)
 
     packages = lock_doc.get("package")
@@ -251,10 +310,11 @@ def build_plan(manifest: bytes, lock: bytes) -> dict[str, dict[str, Any]]:
                         f"{name} resolves privately but is not declared private"
                     )
                 index = str(source["url"])
+                _refuse_a_decorated_index(index)
             elif host in PUBLIC_HOSTS:
                 index = PUBLIC_INDEX
             else:
-                raise WarmRefused(f"{name} resolves from unallowed host {host}")
+                raise WarmRefused(f"{name} resolves from unallowed host {host!r}")
 
         wheels: dict[str, str] = {}
         for item in files:
@@ -270,7 +330,10 @@ def build_plan(manifest: bytes, lock: bytes) -> dict[str, dict[str, Any]]:
                 raise WarmRefused(f"{name} has an unusable wheel hash or name")
             match = WHEEL_RE.fullmatch(filename)
             if match is None or _normalise(match.group(1)) != name:
-                raise WarmRefused(f"{filename} does not belong to {name}")
+                # `!r` because `filename` is lock text this job prints: a name
+                # holding `::` or a newline would otherwise forge a workflow
+                # command in the log.
+                raise WarmRefused(f"{filename!r} does not belong to {name}")
             wheels[filename] = digest.group(1)
         if not wheels:
             raise WarmRefused(f"{name} locks no wheel")
@@ -335,9 +398,23 @@ def acquire(
     no build backend is invoked, so no code from any dependency executes here.
     The credential travels in the environment, never in argv, and no output from
     the downloader is ever relayed — its error text can contain the index URL.
+    That environment is CONSTRUCTED from `CHILD_ENV_KEYS` rather than inherited,
+    so the step's own copy of the registry token is not handed to pip a second
+    time as a plain variable it has no use for.
     """
     if not credential:
         raise WarmRefused("registry credential unavailable")
+
+    # The host screen runs over the WHOLE plan before any effect — before the
+    # destination is created and before the first download. Screening inside the
+    # download loop would already have made a directory, and would already have
+    # contacted the hosts of every entry that happened to sort earlier, by the
+    # time it reached the entry that was not allowed.
+    for entry in plan.values():
+        screened = _host(str(entry["index"]))
+        if screened not in PRIVATE_HOSTS | PUBLIC_HOSTS:
+            raise WarmRefused(f"refusing to contact unallowed host {screened!r}")
+
     if destination.exists():
         raise WarmRefused("wheelhouse destination must not already exist")
     destination.mkdir(parents=True)
@@ -345,16 +422,15 @@ def acquire(
     for name, item in sorted(plan.items()):
         index = item["index"]
         host = _host(index)
+        # Re-checked per entry: the screen above is what makes the refusal
+        # effect-free, this is what makes the credential's own line of code
+        # readable as safe on its own.
         if host not in PRIVATE_HOSTS | PUBLIC_HOSTS:
-            raise WarmRefused(f"refusing to contact unallowed host {host}")
+            raise WarmRefused(f"refusing to contact unallowed host {host!r}")
         if host in PRIVATE_HOSTS:
             index = f"https://ci-reader:{credential}@{index[len('https://') :]}"
         with tempfile.TemporaryDirectory() as staging:
-            env = {
-                key: value
-                for key, value in os.environ.items()
-                if not key.startswith("PIP_")
-            }
+            env = {key: os.environ[key] for key in CHILD_ENV_KEYS if key in os.environ}
             env["PIP_INDEX_URL"] = index
             env["PIP_CONFIG_FILE"] = os.devnull
             env["PIP_NO_INPUT"] = "1"
