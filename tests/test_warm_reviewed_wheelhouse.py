@@ -20,6 +20,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -675,6 +676,82 @@ def test_the_credential_splice_cannot_be_decorated_by_the_plan_it_is_handed(
     # The lock's userinfo is gone, and the host pip is pointed at is the one the
     # allowlist admitted rather than whatever the second `@` would have chosen.
     assert "someone" not in url
+
+
+def test_a_credential_that_would_redirect_the_index_url_refuses(
+    tmp_path: Path,
+) -> None:
+    """BREAK CONDITION: remove the post-splice reparse check in `acquire`.
+
+    A different break condition from the test above, which is why the two stay
+    apart: that one is about what the PLAN can smuggle into the authority, this
+    one is about what the CREDENTIAL can. `/`, `?` and `#` each TERMINATE the
+    authority component, so `https://ci-reader:tok/en@registry.dotmac.io/simple`
+    reparses with hostname `ci-reader` and the remainder as path — the
+    downloader would be pointed at a host named `ci-reader`, carrying the
+    leading fragment of the credential, and never reach the registry the
+    allowlist admitted. A `[` is the same class by another route: the netloc
+    reads as a malformed IPv6 host and does not parse at all. The old
+    string-slicing splice had the identical flaw, so this is not a regression in
+    the rebuilt form — it is the half the rebuild cannot cover, since composing
+    the netloc from `host` constrains only the LOCK's contribution to it.
+
+    That `runner` was never called is the load-bearing assertion: a refusal
+    raised after the request had gone out would satisfy `pytest.raises` while
+    the misdirected credential was already spent.
+    """
+
+    def attempt(destination: Path, hostile: str) -> tuple[list[str], str]:
+        calls: list[str] = []
+
+        def run(argv, **kwargs):
+            calls.append(kwargs["env"]["PIP_INDEX_URL"])
+            raise AssertionError("the downloader was dispatched")
+
+        plan = warm.build_plan(MANIFEST, _lock())
+        with pytest.raises(warm.WarmRefused, match="does not reparse") as raised:
+            warm.acquire(plan, destination, hostile, runner=run)
+        return calls, str(raised.value)
+
+    for position, hostile in enumerate(("tok/en", "tok?x", "tok#y", "tok[en")):
+        calls, message = attempt(tmp_path / f"wheelhouse-{position}", hostile)
+        assert calls == [], hostile
+        assert hostile not in message, message
+        assert "ci-reader" not in message, message
+        assert "registry.dotmac.io" not in message, message
+
+
+def test_a_credential_of_legal_userinfo_punctuation_is_still_accepted(
+    tmp_path: Path,
+) -> None:
+    """BREAK CONDITION: implement the check above as a character denylist — or a
+    charset allowlist — over the credential instead of a reparse of the URL.
+
+    The accept direction for the refusal above, and this file's standing rule: a
+    warmer that refused every dispatch would satisfy every refusal test here.
+    `+`, `=`, `:` and `@` are all legal in userinfo and none of them terminates
+    the authority, so a token containing them must keep working and must still
+    produce the exact URL. Checked against the parser rather than assumed —
+    `urlsplit` reads the host of `https://ci-reader:a+b=c:d@e@registry...` as
+    the registry, the LAST `@` being the delimiter — which is the whole reason
+    the guard asks the parser instead of guessing at a token's charset.
+    """
+    secret = "a+b=c:d@e"
+    envs: list[dict[str, str]] = []
+    inner = _runner({KERNEL_WHEEL: b"kernel-wheel", PYTEST_WHEEL: b"pytest-wheel"})
+
+    def run(argv, **kwargs):
+        envs.append(dict(kwargs["env"]))
+        return inner(argv, **kwargs)
+
+    plan = warm.build_plan(MANIFEST, _lock())
+    warm.acquire(plan, tmp_path / "wheelhouse", secret, runner=run)
+
+    private = [env["PIP_INDEX_URL"] for env in envs if secret in env["PIP_INDEX_URL"]]
+    assert private == [
+        f"https://ci-reader:{secret}@registry.dotmac.io/api/packages/dotmac/pypi/simple"
+    ]
+    assert urlsplit(private[0]).hostname == "registry.dotmac.io"
 
 
 def test_the_downloader_gets_a_constructed_environment_not_the_jobs(

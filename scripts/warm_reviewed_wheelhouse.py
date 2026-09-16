@@ -463,6 +463,33 @@ def acquire(
                     parsed.fragment,
                 )
             )
+            # Then REPARSE what was just built and confirm it still names the
+            # host that was admitted. Composing the netloc from `host` settles
+            # the lock's contribution; it says nothing about the credential's,
+            # and the credential is not a shape this module gets to choose. A
+            # `/`, `?` or `#` in it TERMINATES the authority component, so
+            # `https://ci-reader:tok/en@registry.dotmac.io/simple` reparses with
+            # hostname `ci-reader` and the rest as path — pip would be pointed
+            # at a host named `ci-reader` carrying a partial credential, and the
+            # only symptom would be the deliberately fixed `acquisition failed`
+            # message below, which cannot say why. Enumerating the characters a
+            # registry token may contain would be a guess at a deployment
+            # question and a new denylist; asking the parser whether the URL
+            # still means what it was built to mean is decision-free and catches
+            # anything with that property. An unparseable netloc (a bracket in
+            # the credential reads as a malformed IPv6 host) is the same answer.
+            try:
+                rebuilt = urlsplit(index).hostname
+            except ValueError:
+                rebuilt = None
+            if rebuilt != host:
+                # Fixed text naming only the package: `index` holds the
+                # credential and the credential is what is under suspicion, so
+                # neither may appear.
+                raise WarmRefused(
+                    f"credentialed index url for {name} does not reparse to "
+                    "the admitted host"
+                )
         with tempfile.TemporaryDirectory() as staging:
             env = {key: os.environ[key] for key in CHILD_ENV_KEYS if key in os.environ}
             env["PIP_INDEX_URL"] = index
