@@ -17,6 +17,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/wheelhouse-warm.yml"
+GUARD_WORKFLOW = ROOT / ".github/workflows/wheelhouse-warm-tests.yml"
 CACHE_SAVE = "actions/cache/save@caa296126883cff596d87d8935842f9db880ef25"
 PIN = re.compile(r"[^@\s]+@([0-9a-f]{40})(?:\s+#.*)?\Z")
 
@@ -30,6 +31,26 @@ def _workflow() -> dict[str, Any]:
 
 def _job() -> dict[str, Any]:
     return _workflow()["jobs"]["warm"]
+
+
+def test_hosted_guard_suite_is_secret_free_and_collects_both_test_files() -> None:
+    """The new guard suite must run before the legacy bundle can be repaired."""
+    document = yaml.safe_load(GUARD_WORKFLOW.read_text(encoding="utf-8"))
+    triggers = document.pop(True, document.pop("on", None))
+    assert set(triggers) == {"pull_request", "push"}
+    assert document["permissions"] == {"contents": "read"}
+    job = document["jobs"]["guards"]
+    assert job["runs-on"] == "ubuntu-latest"
+    assert "environment" not in job
+    steps = job["steps"]
+    assert all("secrets." not in str(step) for step in steps)
+    for step in steps:
+        if "uses" in step:
+            assert PIN.fullmatch(step["uses"])
+    commands = "\n".join(str(step.get("run", "")) for step in steps)
+    assert "--noconftest" in commands
+    assert "tests/test_warm_reviewed_wheelhouse.py" in commands
+    assert "tests/test_wheelhouse_warm_workflow.py" in commands
 
 
 def test_the_warmer_is_dispatch_only_and_takes_an_exact_reviewed_commit() -> None:
