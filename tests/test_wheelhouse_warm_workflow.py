@@ -39,11 +39,14 @@ def test_hosted_guard_suite_is_secret_free_and_collects_both_test_files() -> Non
     triggers = document.pop(True, document.pop("on", None))
     assert set(triggers) == {"pull_request", "push"}
     assert document["permissions"] == {"contents": "read"}
+    assert "env" not in document
     job = document["jobs"]["guards"]
     assert job["runs-on"] == "ubuntu-latest"
     assert "environment" not in job
+    assert "env" not in job
     steps = job["steps"]
     assert all("secrets." not in str(step) for step in steps)
+    assert all("github.token" not in str(step).lower() for step in steps)
     for step in steps:
         if "uses" in step:
             assert PIN.fullmatch(step["uses"])
