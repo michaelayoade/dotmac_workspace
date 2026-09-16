@@ -34,12 +34,18 @@ jobs:
       - name: Download and verify wheels
         env:
           # Unique to this environment: never fall back to a repository secret.
-          PIP_INDEX_URL: https://ci-reader:${{ secrets.FORGEJO_BUNDLE_READ_TOKEN }}@registry.dotmac.io/api/packages/dotmac/pypi/simple
-        run: >-
-          python scripts/workspace_bundle_producer.py
-          --plan expected-dependencies.json
-          --download-dir wheels
-          --output bundle.zip
+          FORGEJO_BUNDLE_READ_TOKEN: ${{ secrets.FORGEJO_BUNDLE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$FORGEJO_BUNDLE_READ_TOKEN" ]; then
+            echo 'bundle credential unavailable' >&2
+            exit 2
+          fi
+          export PIP_INDEX_URL="https://ci-reader:${FORGEJO_BUNDLE_READ_TOKEN}@registry.dotmac.io/api/packages/dotmac/pypi/simple"
+          python scripts/workspace_bundle_producer.py \
+            --plan expected-dependencies.json \
+            --download-dir wheels \
+            --output bundle.zip
 
       - name: Upload verified archive
         id: bundle-upload

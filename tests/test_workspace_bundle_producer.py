@@ -113,7 +113,11 @@ def test_workflow_has_protected_fetch_and_pinned_actions() -> None:
     assert "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97" in workflow
     assert "python-version: '3.12'" in workflow
     assert "secrets.FORGEJO_BUNDLE_READ_TOKEN" in workflow
+    assert workflow.count("secrets.") == 1
     assert "secrets.FORGEJO_READ_TOKEN" not in workflow
+    assert "FORGEJO_PYPI_TOKEN" not in workflow
+    assert "FORGEJO_PYPI_USER" not in workflow
+    assert 'if [ -z "$FORGEJO_BUNDLE_READ_TOKEN" ]; then' in workflow
     assert "ci-reader:" in workflow
     assert "upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0" in workflow
     assert (
@@ -141,4 +145,3 @@ def test_workflow_has_protected_fetch_and_pinned_actions() -> None:
     assert "\n          artifact-id:" not in workflow
     assert "output: dependency-bundle-manifest.json" not in workflow
     assert "run: pip" not in workflow
-    assert "FORGEJO_PYPI_TOKEN" not in workflow
