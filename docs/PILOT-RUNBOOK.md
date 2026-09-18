@@ -105,15 +105,42 @@ introduce anything new here.
 
 ## 4. Build and deploy
 
+**The deploy path runs an immutable digest, never a tag.** This changed with the
+deployment-foundation adoption and it changes this procedure — see
+`deploy/README.md`. `WORKSPACE_TAG` is gone, `:latest` is unreachable, and the
+root compose file has no default: an unpinned host refuses to start rather than
+silently running whatever the tag meant this morning.
+
+Build and push a candidate:
+
     DOCKER_BUILDKIT=1 docker build \
       --secret id=forgejo_netrc,src="$HOME/.netrc" \
       -t "registry.dotmac.io/dotmac/workspace:${TAG}" .
+    docker push "registry.dotmac.io/dotmac/workspace:${TAG}"
+
+Resolve the DIGEST that push produced — the tag was only a handle to move the
+bytes; from here nothing refers to it again:
+
+    docker buildx imagetools inspect --raw \
+      "registry.dotmac.io/dotmac/workspace:${TAG}" | sha256sum
+
+Record that digest and the source revision it was built from in
+`deploy/product.toml` (`[image] reference` and `source_revision`), run
+`make deploy-render`, set `require-real-digests: true` in
+`.github/workflows/deployment-conformance.yml`, and merge. The descriptor is the
+image authority; the deploy path reads it, and nothing else may.
 
 Then on the host: `.env` from `.env.example` with the four required values, the
 client secret written from OpenBao to the path `WORKSPACE_OIDC_CLIENT_SECRET_PATH`
 names, and
 
-    docker compose up -d workspace
+    WORKSPACE_IMAGE="$(scripts/resolve_deploy_image.sh)" docker compose up -d workspace
+
+`resolve_deploy_image.sh` reads the reference out of
+`deploy/rendered/docker-compose.yml` and refuses anything that is not
+`name@sha256:<64 hex>` — including the all-zero placeholder the descriptor
+carries until the step above is done. A refusal here means the descriptor has no
+candidate yet, not that the script is broken.
 
 **Recreate, never restart, after an environment change.** `docker compose
 restart` re-runs the existing container with its old environment; only `up -d`

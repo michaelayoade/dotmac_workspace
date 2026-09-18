@@ -34,7 +34,17 @@ GRAPH_DATABASE_URL ?= postgresql+psycopg://unused:unused@127.0.0.1:1/unused
 # envsubst is restricted to these two names on purpose — unrestricted it would
 # also substitute nginx's own $host/$scheme/$remote_addr and emit a config
 # that proxies with empty headers.
-NGINX_PUBLIC_HOST ?= workspace.dotmac.io
+# NO DEFAULT, deliberately. The public hostname is a property of a DEPLOYMENT,
+# not of this repository: one host name baked in as a default is how a reusable
+# artifact quietly becomes about one deployment, and how somebody renders a
+# vhost for the wrong site by typing nothing. Supply it from the environment
+# inventory at the moment you render:
+#
+#     make nginx-render NGINX_PUBLIC_HOST=<the host this deployment serves>
+#
+# `tests/test_deployment_descriptor.py` fails if a production hostname is ever
+# committed back into a deployment artefact, and proves it by planting one.
+NGINX_PUBLIC_HOST ?=
 NGINX_UPSTREAM ?= http://127.0.0.1:8000
 NGINX_TEMPLATE ?= deploy/nginx/workspace.conf.template
 NGINX_SSH ?= root@$(NGINX_PUBLIC_HOST)
@@ -43,7 +53,8 @@ NGINX_SITE ?= /etc/nginx/sites-available/$(NGINX_PUBLIC_HOST)
 .DEFAULT_GOAL := help
 
 .PHONY: help check lint format type-check test test-db dev migrate migrate-graph \
-	test-db-up test-db-down from-wheel-boot nginx-render nginx-diff
+	test-db-up test-db-down from-wheel-boot nginx-render nginx-diff \
+	deploy-validate deploy-render deploy-check deploy-plan deploy-image
 
 help: ## List targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -92,7 +103,14 @@ migrate: ## Compose all three lineages and upgrade
 migrate-graph: ## Show the composed revision graph (all three lineages)
 	$(PYTHON) python -c "from alembic import command; from dotmac_workspace.migrations import make_alembic_config; import os; command.history(make_alembic_config(os.environ.get('MIGRATION_DATABASE_URL') or '$(GRAPH_DATABASE_URL)'))"
 
-nginx-render: ## Render the nginx vhost from its tracked template
+nginx-render: ## Render the nginx vhost (NGINX_PUBLIC_HOST=<host> is required)
+	@if [ -z "$(NGINX_PUBLIC_HOST)" ]; then \
+		echo "refusing: NGINX_PUBLIC_HOST is unset." >&2; \
+		echo "The vhost template is host-neutral on purpose; the host comes from" >&2; \
+		echo "the deployment's inventory, never from a default in this repository." >&2; \
+		echo "  make nginx-render NGINX_PUBLIC_HOST=<host>" >&2; \
+		exit 1; \
+	fi
 	@WORKSPACE_PUBLIC_HOST='$(NGINX_PUBLIC_HOST)' WORKSPACE_UPSTREAM='$(NGINX_UPSTREAM)' \
 		envsubst '$${WORKSPACE_PUBLIC_HOST} $${WORKSPACE_UPSTREAM}' < $(NGINX_TEMPLATE)
 
@@ -104,3 +122,34 @@ nginx-diff: ## Fail if the deployed vhost has drifted from the tracked template
 	else \
 		echo "DRIFT: the deployed vhost differs from the tracked template" >&2; exit 1; \
 	fi
+
+# ── the deployment descriptor (Starter ADR-0070) ────────────────────────────
+#
+# `deploy/product.toml` is the one deployment artifact this repository declares;
+# everything under `deploy/rendered/` is generated from it by the exact-pinned
+# `dotmac-deployment-foundation` and byte-compared in CI. Never hand-edit a
+# rendered file — `deploy-check` will find it, and the diff will say why.
+#
+# The render is HOST-NEUTRAL: the descriptor names a reserved, non-resolvable
+# fixture host, so nothing here needs — or is allowed to hold — the name of a
+# live deployment.
+DEPLOY_DESCRIPTOR ?= deploy/product.toml
+DEPLOY_RENDERED ?= deploy/rendered
+DEPLOY_THRESHOLDS ?= deploy/alerts/thresholds.json
+
+deploy-validate: ## Parse and check the deployment descriptor
+	$(PYTHON) dotmac-deploy -f $(DEPLOY_DESCRIPTOR) validate
+
+deploy-render: ## Regenerate deploy/rendered/ from the descriptor
+	$(PYTHON) dotmac-deploy -f $(DEPLOY_DESCRIPTOR) render \
+		--thresholds $(DEPLOY_THRESHOLDS) -o $(DEPLOY_RENDERED)
+
+deploy-check: ## Fail if any rendered asset differs from the descriptor
+	$(PYTHON) dotmac-deploy -f $(DEPLOY_DESCRIPTOR) render --check \
+		--thresholds $(DEPLOY_THRESHOLDS) -o $(DEPLOY_RENDERED)
+
+deploy-plan: ## Show the ordered deployment plan, gates marked
+	$(PYTHON) dotmac-deploy -f $(DEPLOY_DESCRIPTOR) plan
+
+deploy-image: ## Print the image reference the deploy path may run, or refuse
+	@bash scripts/resolve_deploy_image.sh $(DEPLOY_RENDERED)/docker-compose.yml
