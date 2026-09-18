@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 10,
   "profile_id": "dotmac-workspace-engineering-standards",
   "repository": {
     "canonical_url": "https://github.com/michaelayoade/dotmac_workspace",
@@ -8,7 +8,7 @@
   "governance_model": {
     "kind": "pinned",
     "canonical_url": "https://github.com/michaelayoade/dotmac_governance",
-    "revision": "fbd47b8965002943bd5799992f4b29b04e361582",
+    "revision": "11478a2964a4cbcf3c51dfbd0ea489c6e9083f08",
     "source": "docs/adr/0006-cross-repository-engineering-conformance.md",
     "status": "accepted"
   },
@@ -178,5 +178,34 @@
     ],
     "kit_source_roots": [],
     "conformance_probes": []
-  }
+  },
+  "external_connector_surface": {
+    "baselines": {
+      "outbound_transport": 0,
+      "webhook_surface": 0,
+      "provider_credential": 0,
+      "connector_task": 0,
+      "sync_checkpoint": 0,
+      "delivery_retry": 0
+    },
+    "conserved_exclusions": []
+  },
+  "deployment_artefact_surfaces": [
+    {
+      "surface_id": "workspace-deployment",
+      "subject": "The one deployed Workspace service and the nginx vhost in front of it. docker-compose.yml is what the host actually runs (docs/PILOT-RUNBOOK.md step 4, `docker compose up -d workspace`); deploy/nginx/workspace.conf.template is the render SOURCE for the vhost, and the file under /etc/nginx on the host is a rendered artifact, never hand-edited.",
+      "declaration_paths": [
+        "docker-compose.yml"
+      ],
+      "rendered_paths": [],
+      "render_check_workflow": ".github/workflows/ci.yml",
+      "render_check_command": "make nginx-render",
+      "acknowledged_non_deployments": [
+        {
+          "path": "docker-compose.test.yml",
+          "reason": "A disposable PostgreSQL for the migration and RLS canaries, brought up and erased by `make test-db-up` / `make test-db-down`. It is never deployed and holds no real data; it is recorded here so that its resemblance to a deployment declaration is a stated decision rather than an omission."
+        }
+      ]
+    }
+  ]
 }
